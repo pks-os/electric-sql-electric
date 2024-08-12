@@ -191,7 +191,7 @@ defmodule Electric.ShapeCache do
       not is_known_shape_id?(state, shape_id) ->
         {:reply, {:error, :unknown}, state}
 
-      Storage.snapshot_exists?(shape_id, state.storage) ->
+      Storage.snapshot_started?(shape_id, state.storage) ->
         {:reply, :started, state}
 
       true ->
@@ -278,7 +278,7 @@ defmodule Electric.ShapeCache do
        do: state
 
   defp maybe_start_snapshot(state, shape_id, shape) do
-    if not Storage.snapshot_exists?(shape_id, state.storage) do
+    if not Storage.snapshot_started?(shape_id, state.storage) do
       parent = self()
 
       %{
