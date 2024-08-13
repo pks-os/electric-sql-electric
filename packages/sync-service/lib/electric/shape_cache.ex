@@ -359,7 +359,7 @@ defmodule Electric.ShapeCache do
   end
 
   defp recover_shapes(state) do
-    Storage.cleanup_shapes_without_xmins(state.storage)
+    Storage.initialise(state.storage)
 
     state.storage
     |> Storage.list_shapes()
