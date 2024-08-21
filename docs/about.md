@@ -21,7 +21,7 @@ import Tweet from 'vue-tweet'
 
 | Authored by | Published on |
 | ----------- | ------------ |
-| [James Arthur](https://electric-sql.com/about/team#kyle) | 17th July 2024 |
+| [James Arthur](https://electric-sql.com/about/team#james) | 17th July 2024 |
 
 <br /> [`electric-next`](https://github.com/electric-sql/electric-next) is an experimental new approach to building ElectricSQL.
 
@@ -64,14 +64,14 @@ To go from core database replication technology to a viable solution for buildin
   </div>
   <figcaption className="figure-caption text-end">
     Schema evolution diagramme from the previous
-    <a href="https://electric-sql/docs/reference/architecture" target="_blank">
+    <a href="https://electric-sql.com/docs/reference/architecture" target="_blank">
       architecture&nbsp;page</a>.
   </figcaption>
 </figure>
 
 Coming from a research background, we wanted the system to be optimal. As a result, we often picked the more complex solution from the design space and, as a vertically integrated system, that solution became the only one available to use with Electric.
 
-For example, we designed the [DDLX rule system](https://electric-sql/docs/api/ddlx) in a certain way, because we wanted authorization that supported finality of local writes. However, rules (and our rules) are only one way to do authorization in a local-first system. Many applications would be happy with a simpler solution, such as Postgres RLS or a server authoritative middleware.
+For example, we designed the [DDLX rule system](https://electric-sql.com/docs/api/ddlx) in a certain way, because we wanted authorization that supported finality of local writes. However, rules (and our rules) are only one way to do authorization in a local-first system. Many applications would be happy with a simpler solution, such as Postgres RLS or a server authoritative middleware.
 
 These decisions not only made Electric more complex to use but also more complex to develop. Despite our best efforts, this has slowed us down and tested the patience of even the most forgiving of our early adopters.
 
@@ -194,7 +194,7 @@ The previous Electric supported a single primary write-path pattern &mdash; [wri
   </div>
   <figcaption className="figure-caption text-end">
     Data flow diagramme from the previous
-    <a href="https://electric-sql/docs/reference/architecture" target="_blank">
+    <a href="https://electric-sql.com/docs/reference/architecture" target="_blank">
       architecture&nbsp;page</a>.
   </figcaption>
 </figure>
@@ -213,7 +213,7 @@ So, following the strategy of paring down to the core and then progressively lay
 
 This explicitly reduces the capability of the system in the short term, in order to build a better, more resilient system in the long term. The beauty is that, because we no longer prescribe a write-path strategy, you can choose and if necessary implement any write-path strategy you like.
 
-We will only focus on the more complex strategies ourseves once the simpler ones are bulletproof. And we hope that others, like [LiveStore](https://www.schickling.dev/projects/livestore) and [Drizzle](https://orm.drizzle.team/), for example, will build better client-side libraries that we can.
+We will only focus on the more complex strategies ourselves once the simpler ones are bulletproof. And we hope that others, like [LiveStore](https://www.schickling.dev/projects/livestore) and [Drizzle](https://orm.drizzle.team/), for example, will build better client-side libraries that we can.
 
 #### A note on finality of local writes
 
