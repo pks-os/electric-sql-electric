@@ -1,4 +1,5 @@
 defmodule Electric.ShapeCache.Storage do
+  alias Electric.Shapes.Querying
   alias Electric.LogItems
   alias Electric.Shapes.Shape
   alias Electric.Replication.LogOffset
@@ -49,12 +50,9 @@ defmodule Electric.ShapeCache.Storage do
 
   Should raise an error if making the snapshot had failed for any reason.
   """
-  @doc unstable: "The meta information about the single table is subject to change"
   @callback make_new_snapshot!(
               shape_id(),
-              Electric.Shapes.Shape.t(),
-              Postgrex.Query.t(),
-              Enumerable.t(row()),
+              Querying.json_result_stream(),
               compiled_opts()
             ) :: :ok
   @callback mark_snapshot_as_started(shape_id, compiled_opts()) :: :ok
@@ -67,8 +65,8 @@ defmodule Electric.ShapeCache.Storage do
   @doc "Get stream of the log for a shape since a given offset"
   @callback get_log_stream(shape_id(), LogOffset.t(), LogOffset.t(), compiled_opts()) ::
               Enumerable.t()
-  @doc "Check if log entry for given shape ID and offset exists"
-  @callback has_log_entry?(shape_id(), LogOffset.t(), compiled_opts()) :: boolean()
+  @doc "Check if log entries for given shape ID exist"
+  @callback has_shape?(shape_id(), compiled_opts()) :: boolean()
   @doc "Store a relation containing information about the schema of a table"
   @callback store_relation(Relation.t(), compiled_opts()) :: :ok
   @doc "Get all stored relations"
@@ -108,16 +106,9 @@ defmodule Electric.ShapeCache.Storage do
   @doc """
   Make a new snapshot for a shape ID based on the meta information about the table and a stream of plain string rows
   """
-  @doc unstable: "The meta information about the single table is subject to change"
-  @spec make_new_snapshot!(
-          shape_id(),
-          Electric.Shapes.Shape.t(),
-          Postgrex.Query.t(),
-          Enumerable.t(row()),
-          storage()
-        ) :: :ok
-  def make_new_snapshot!(shape_id, shape, meta, stream, {mod, opts}),
-    do: mod.make_new_snapshot!(shape_id, shape, meta, stream, opts)
+  @spec make_new_snapshot!(shape_id(), Querying.json_result_stream(), storage()) :: :ok
+  def make_new_snapshot!(shape_id, stream, {mod, opts}),
+    do: mod.make_new_snapshot!(shape_id, stream, opts)
 
   @spec mark_snapshot_as_started(shape_id, compiled_opts()) :: :ok
   def mark_snapshot_as_started(shape_id, {mod, opts}),
@@ -138,10 +129,10 @@ defmodule Electric.ShapeCache.Storage do
       when max_offset == :infinity or not is_log_offset_lt(max_offset, offset),
       do: mod.get_log_stream(shape_id, offset, max_offset, opts)
 
-  @doc "Check if log entry for given shape ID and offset exists"
-  @spec has_log_entry?(shape_id(), LogOffset.t(), storage()) :: boolean()
-  def has_log_entry?(shape_id, offset, {mod, opts}),
-    do: mod.has_log_entry?(shape_id, offset, opts)
+  @doc "Check if log entries for given shape ID exist"
+  @spec has_shape?(shape_id(), storage()) :: boolean()
+  def has_shape?(shape_id, {mod, opts}),
+    do: mod.has_shape?(shape_id, opts)
 
   @doc "Store a relation containing information about the schema of a table"
   @spec store_relation(Relation.t(), storage()) :: :ok
