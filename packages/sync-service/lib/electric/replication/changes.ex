@@ -163,6 +163,7 @@ defmodule Electric.Replication.Changes do
   end
 
   defmodule Column do
+    @derive Jason.Encoder
     defstruct [:name, :type_oid]
 
     @type t() :: %__MODULE__{
@@ -172,6 +173,7 @@ defmodule Electric.Replication.Changes do
   end
 
   defmodule Relation do
+    @derive Jason.Encoder
     defstruct [:id, :schema, :table, :columns]
 
     @type t() :: %__MODULE__{
@@ -273,11 +275,22 @@ defmodule Electric.Replication.Changes do
       %UpdatedRecord{record: %{id: 1}}
   """
   def convert_update(%UpdatedRecord{} = change, to: :new_record) do
-    %NewRecord{relation: change.relation, record: change.record}
+    %NewRecord{
+      relation: change.relation,
+      record: change.record,
+      key: change.key,
+      log_offset: change.log_offset
+    }
   end
 
   def convert_update(%UpdatedRecord{} = change, to: :deleted_record) do
-    %DeletedRecord{relation: change.relation, old_record: change.old_record}
+    %DeletedRecord{
+      relation: change.relation,
+      old_record: change.old_record,
+      key: change.old_key || change.key,
+      log_offset: change.log_offset,
+      tags: change.tags
+    }
   end
 
   def convert_update(%UpdatedRecord{} = change, to: :updated_record), do: change
