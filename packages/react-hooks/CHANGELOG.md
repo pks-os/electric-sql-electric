@@ -1,5 +1,20 @@
 # @electric-sql/react
 
+## 0.3.3
+
+### Patch Changes
+
+- 3c8f662: Fix `useShape` not returning correct data upon changing `selector` prop - see https://github.com/electric-sql/electric/issues/1446.
+- b0f39c7: add test that useShape re-renders on where state change
+
+## 0.3.2
+
+### Patch Changes
+
+- 0836ebb: Improve type of selector argument in useShape hook.
+- Updated dependencies [d3b4711]
+  - @electric-sql/client@0.3.3
+
 ## 0.3.1
 
 ### Patch Changes
