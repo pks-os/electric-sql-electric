@@ -1,13 +1,15 @@
 defmodule Electric.ShapeCache.Storage do
+  import Electric.Replication.LogOffset, only: [is_log_offset_lt: 2]
+
   alias Electric.Shapes.Querying
-  alias Electric.LogItems
   alias Electric.Shapes.Shape
   alias Electric.Replication.LogOffset
 
-  @type shape_id :: String.t()
+  @type shape_id :: Electric.ShapeCacheBehaviour.shape_id()
   @type compiled_opts :: term()
   @type storage :: {module(), compiled_opts()}
 
+  @type log_item :: {LogOffset.t(), Querying.json_iodata()} | {:chunk_boundary | LogOffset.t()}
   @type log_state :: %{
           current_chunk_byte_size: non_neg_integer()
         }
@@ -19,16 +21,16 @@ defmodule Electric.ShapeCache.Storage do
   @callback for_shape(shape_id(), compiled_opts()) :: compiled_opts()
 
   @doc "Start any processes required to run the storage backend"
-  @callback start_link(storage()) :: GenServer.on_start()
-  @callback initialise(storage()) :: :ok
-  @callback list_shapes(storage()) :: [
+  @callback start_link(compiled_opts()) :: GenServer.on_start()
+  @callback initialise(compiled_opts()) :: :ok
+  @callback list_shapes(compiled_opts()) :: [
               shape_id: shape_id(),
               shape: Shape.t(),
               latest_offset: LogOffset.t(),
               snapshot_xmin: non_neg_integer()
             ]
-  @callback add_shape(shape_id(), Shape.t(), storage()) :: :ok
-  @callback set_snapshot_xmin(shape_id(), non_neg_integer(), storage()) :: :ok
+  @callback add_shape(shape_id(), Shape.t(), compiled_opts()) :: :ok
+  @callback set_snapshot_xmin(shape_id(), non_neg_integer(), compiled_opts()) :: :ok
 
   @doc "Check if snapshot for a given shape id already exists"
   @callback snapshot_started?(shape_id(), compiled_opts()) :: boolean()
@@ -50,12 +52,8 @@ defmodule Electric.ShapeCache.Storage do
   @callback mark_snapshot_as_started(shape_id, compiled_opts()) :: :ok
 
   @doc "Append log items from one transaction to the log"
-  @callback append_to_log!(
-              shape_id(),
-              [LogItems.log_item()],
-              log_state(),
-              compiled_opts()
-            ) :: log_state()
+  @callback append_to_log!(shape_id(), Enumerable.t(log_item()), storage()) :: :ok
+
   @doc "Get stream of the log for a shape since a given offset"
   @callback get_log_stream(shape_id(), LogOffset.t(), LogOffset.t(), compiled_opts()) ::
               log()
@@ -89,6 +87,8 @@ defmodule Electric.ShapeCache.Storage do
   def start_link({mod, opts}) do
     apply(mod, :start_link, [opts])
   end
+
+  @last_log_offset LogOffset.last()
 
   @spec initialise(storage()) :: :ok
   def initialise({mod, opts}),
@@ -149,17 +149,16 @@ defmodule Electric.ShapeCache.Storage do
   @doc """
   Append log items from one transaction to the log
   """
-  @spec append_to_log!(shape_id(), [LogItems.log_item()], log_state(), storage()) :: log_state()
-  def append_to_log!(shape_id, log_items, log_state, {mod, opts}) do
+  @spec append_to_log!(shape_id(), Enumerable.t(log_item()), storage()) :: :ok
+  def append_to_log!(shape_id, log_items, {mod, opts}) do
     shape_opts = mod.for_shape(shape_id, opts)
-    mod.append_to_log!(shape_id, log_items, log_state, shape_opts)
+    mod.append_to_log!(shape_id, log_items, shape_opts)
   end
 
-  import LogOffset, only: :macros
   @doc "Get stream of the log for a shape since a given offset"
   @spec get_log_stream(shape_id(), LogOffset.t(), LogOffset.t(), storage()) :: log()
-  def get_log_stream(shape_id, offset, max_offset \\ LogOffset.last(), {mod, opts})
-      when max_offset == :infinity or not is_log_offset_lt(max_offset, offset) do
+  def get_log_stream(shape_id, offset, max_offset \\ @last_log_offset, {mod, opts})
+      when max_offset == @last_log_offset or not is_log_offset_lt(max_offset, offset) do
     shape_opts = mod.for_shape(shape_id, opts)
 
     mod.get_log_stream(shape_id, offset, max_offset, shape_opts)

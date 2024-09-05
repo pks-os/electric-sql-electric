@@ -3,7 +3,7 @@ defmodule Support.ComponentSetup do
   alias Electric.Postgres.ReplicationClient
   alias Electric.Replication.ShapeLogCollector
   alias Electric.ShapeCache
-  alias Electric.ShapeCache.CubDbStorage
+  alias Electric.ShapeCache.FileStorage
   alias Electric.ShapeCache.InMemoryStorage
   alias Electric.Postgres.Inspector.EtsInspector
 
@@ -31,12 +31,9 @@ defmodule Support.ComponentSetup do
 
   def with_cub_db_storage(ctx) do
     {:ok, storage_opts} =
-      CubDbStorage.shared_opts(
-        db: :"shape_cubdb_#{full_test_name(ctx)}",
-        file_path: ctx.tmp_dir
-      )
+      FileStorage.shared_opts(storage_dir: ctx.tmp_dir)
 
-    %{storage: {CubDbStorage, storage_opts}}
+    %{storage: {FileStorage, storage_opts}}
   end
 
   def with_persistent_kv(_ctx) do
@@ -44,9 +41,17 @@ defmodule Support.ComponentSetup do
     %{persistent_kv: kv}
   end
 
+  def with_log_chunking(_ctx) do
+    %{chunk_bytes_threshold: 10_000}
+  end
+
   def with_shape_cache(ctx, additional_opts \\ []) do
     shape_meta_table = :"shape_meta_#{full_test_name(ctx)}"
-    server = :"shape_cache_#{full_test_name(ctx)}"
+
+    server =
+      Keyword.get(additional_opts, :name, :"shape_cache_#{full_test_name(ctx)}")
+
+    consumer_supervisor = :"consumer_supervisor_#{full_test_name(ctx)}"
 
     start_opts =
       [
@@ -54,10 +59,12 @@ defmodule Support.ComponentSetup do
         shape_meta_table: shape_meta_table,
         inspector: ctx.inspector,
         storage: ctx.storage,
+        chunk_bytes_threshold: ctx.chunk_bytes_threshold,
         db_pool: ctx.pool,
         persistent_kv: ctx.persistent_kv,
         registry: ctx.registry,
-        log_producer: ctx.shape_log_collector
+        log_producer: ctx.shape_log_collector,
+        consumer_supervisor: consumer_supervisor
       ]
       |> Keyword.merge(additional_opts)
       |> Keyword.put_new_lazy(:prepare_tables_fn, fn ->
@@ -65,6 +72,7 @@ defmodule Support.ComponentSetup do
          [ctx.publication_name]}
       end)
 
+    {:ok, _pid} = Electric.Shapes.ConsumerSupervisor.start_link(name: consumer_supervisor)
     {:ok, _pid} = ShapeCache.start_link(start_opts)
 
     shape_cache_opts = [
@@ -75,17 +83,9 @@ defmodule Support.ComponentSetup do
 
     %{
       shape_cache_opts: shape_cache_opts,
-      shape_cache: {ShapeCache, shape_cache_opts}
-    }
-  end
-
-  def with_transaction_producer(ctx) do
-    name = :"transaction_producer_#{full_test_name(ctx)}"
-    {:ok, _pid} = Support.TransactionProducer.start_link(name: name)
-
-    %{
-      shape_log_collector: name,
-      transaction_producer: name
+      shape_cache: {ShapeCache, shape_cache_opts},
+      shape_cache_server: server,
+      consumer_supervisor: consumer_supervisor
     }
   end
 
@@ -95,7 +95,8 @@ defmodule Support.ComponentSetup do
     {:ok, _} =
       ShapeLogCollector.start_link(
         name: name,
-        inspector: ctx.inspector
+        inspector: ctx.inspector,
+        link_consumers: Map.get(ctx, :link_log_collector, true)
       )
 
     %{shape_log_collector: name}
@@ -126,15 +127,16 @@ defmodule Support.ComponentSetup do
     %{inspector: {EtsInspector, pg_info_table: pg_info_table, server: server}}
   end
 
-  def with_complete_stack(ctx) do
+  def with_complete_stack(ctx, opts \\ []) do
     [
-      &with_registry/1,
-      &with_inspector/1,
-      &with_persistent_kv/1,
-      &with_cub_db_storage/1,
-      &with_shape_log_collector/1,
-      &with_shape_cache/1,
-      &with_replication_client/1
+      Keyword.get(opts, :registry, &with_registry/1),
+      Keyword.get(opts, :inspector, &with_inspector/1),
+      Keyword.get(opts, :persistent_kv, &with_persistent_kv/1),
+      Keyword.get(opts, :log_chunking, &with_log_chunking/1),
+      Keyword.get(opts, :storage, &with_cub_db_storage/1),
+      Keyword.get(opts, :log_collector, &with_shape_log_collector/1),
+      Keyword.get(opts, :shape_cache, &with_shape_cache/1),
+      Keyword.get(opts, :replication_client, &with_replication_client/1)
     ]
     |> Enum.reduce(ctx, &Map.merge(&2, apply(&1, [&2])))
   end
@@ -148,6 +150,8 @@ defmodule Support.ComponentSetup do
       long_poll_timeout: Access.get(overrides, :long_poll_timeout, 5_000),
       max_age: Access.get(overrides, :max_age, 60),
       stale_age: Access.get(overrides, :stale_age, 300),
+      chunk_bytes_threshold:
+        Access.get(overrides, :chunk_bytes_threshold, ctx.chunk_bytes_threshold),
       allow_shape_deletion: Access.get(overrides, :allow_shape_deletion, true)
     ]
     |> Keyword.merge(overrides)

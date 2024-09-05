@@ -1,15 +1,16 @@
 defmodule Electric.ShapeCache.StorageImplimentationsTest do
   use ExUnit.Case, async: true
-  import Support.TestUtils
 
-  alias Electric.LogItems
+  alias Electric.ShapeCache.FileStorage
   alias Electric.Postgres.Lsn
   alias Electric.Replication.LogOffset
   alias Electric.Replication.Changes
-  alias Electric.ShapeCache.CubDbStorage
   alias Electric.ShapeCache.InMemoryStorage
   alias Electric.Shapes.Shape
   alias Electric.Utils
+
+  import Support.TestUtils
+
   @moduletag :tmp_dir
 
   @shape_id "the-shape-id"
@@ -21,7 +22,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
       }
     }
   }
-  @initial_log_state %{current_chunk_byte_size: 0}
+
   @snapshot_offset LogOffset.first()
   @snapshot_offset_encoded to_string(@snapshot_offset)
   @zero_offset LogOffset.first()
@@ -41,7 +42,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
                ]
                |> Enum.map(&Jason.encode_to_iodata!/1)
 
-  for module <- [InMemoryStorage, CubDbStorage] do
+  for module <- [InMemoryStorage, FileStorage] do
     module_name = module |> Module.split() |> List.last()
 
     doctest module, import: true
@@ -148,7 +149,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
 
         storage.mark_snapshot_as_started(@shape_id, opts)
         storage.make_new_snapshot!(@shape_id, @data_stream, opts)
-        storage.append_to_log!(@shape_id, log_items, @initial_log_state, opts)
+        storage.append_to_log!(@shape_id, log_items, opts)
 
         {@snapshot_offset, stream} = storage.get_snapshot(@shape_id, opts)
         assert Enum.count(stream) == Enum.count(@data_stream)
@@ -196,7 +197,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
       end
     end
 
-    describe "#{module_name}.append_to_log!/4" do
+    describe "#{module_name}.append_to_log!/3" do
       setup do
         {:ok, %{module: unquote(module)}}
       end
@@ -217,7 +218,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
           ]
           |> changes_to_log_items()
 
-        storage.append_to_log!(@shape_id, log_items, @initial_log_state, opts)
+        storage.append_to_log!(@shape_id, log_items, opts)
 
         stream = storage.get_log_stream(@shape_id, LogOffset.first(), LogOffset.last(), opts)
 
@@ -249,20 +250,19 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
           ]
           |> changes_to_log_items()
 
-        log_state1 = storage.append_to_log!(@shape_id, log_items, @initial_log_state, opts)
+        :ok = storage.append_to_log!(@shape_id, log_items, opts)
 
         log1 =
           storage.get_log_stream(@shape_id, LogOffset.first(), LogOffset.last(), opts)
           |> Enum.map(&:json.decode/1)
 
-        log_state2 = storage.append_to_log!(@shape_id, log_items, log_state1, opts)
+        :ok = storage.append_to_log!(@shape_id, log_items, opts)
 
         log2 =
           storage.get_log_stream(@shape_id, LogOffset.first(), LogOffset.last(), opts)
           |> Enum.map(&:json.decode/1)
 
         assert log1 == log2
-        assert log_state1 != log_state2
       end
     end
 
@@ -304,8 +304,8 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
           ]
           |> changes_to_log_items()
 
-        log_state1 = storage.append_to_log!(shape_id, log_items1, @initial_log_state, opts)
-        _ = storage.append_to_log!(shape_id, log_items2, log_state1, opts)
+        :ok = storage.append_to_log!(shape_id, log_items1, opts)
+        :ok = storage.append_to_log!(shape_id, log_items2, opts)
 
         stream = storage.get_log_stream(shape_id, LogOffset.first(), LogOffset.last(), opts)
         entries = Enum.map(stream, &Jason.decode!(&1, keys: :atoms))
@@ -347,8 +347,8 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
           ]
           |> changes_to_log_items()
 
-        log_state1 = storage.append_to_log!(@shape_id, log_items1, @initial_log_state, opts)
-        _ = storage.append_to_log!(@shape_id, log_items2, log_state1, opts)
+        :ok = storage.append_to_log!(@shape_id, log_items1, opts)
+        :ok = storage.append_to_log!(@shape_id, log_items2, opts)
 
         stream =
           storage.get_log_stream(@shape_id, LogOffset.new(lsn1, 0), LogOffset.last(), opts)
@@ -394,8 +394,8 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
           ]
           |> changes_to_log_items()
 
-        log_state1 = storage.append_to_log!(@shape_id, log_items1, @initial_log_state, opts)
-        _ = storage.append_to_log!(@shape_id, log_items2, log_state1, opts)
+        :ok = storage.append_to_log!(@shape_id, log_items1, opts)
+        :ok = storage.append_to_log!(@shape_id, log_items2, opts)
 
         stream =
           storage.get_log_stream(
@@ -436,8 +436,8 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
           ]
           |> changes_to_log_items()
 
-        log_state1 = storage.append_to_log!(shape_id1, log_items1, @initial_log_state, opts)
-        _ = storage.append_to_log!(shape_id2, log_items2, log_state1, opts)
+        :ok = storage.append_to_log!(shape_id1, log_items1, opts)
+        :ok = storage.append_to_log!(shape_id2, log_items2, opts)
 
         assert [%{value: %{name: "Test A"}}] =
                  storage.get_log_stream(shape_id1, LogOffset.first(), LogOffset.last(), opts)
@@ -485,7 +485,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
           ]
           |> changes_to_log_items()
 
-        storage.append_to_log!(@shape_id, log_items, @initial_log_state, opts)
+        storage.append_to_log!(@shape_id, log_items, opts)
 
         storage.cleanup!(@shape_id, opts)
 
@@ -517,7 +517,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
           ]
           |> changes_to_log_items()
 
-        storage.append_to_log!(@shape_id, log_items, @initial_log_state, opts)
+        storage.append_to_log!(@shape_id, log_items, opts)
 
         assert storage.has_shape?(@shape_id, opts)
         refute storage.has_shape?("another_shape_id", opts)
@@ -526,7 +526,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
   end
 
   # Tests for storage implementations that are recoverable
-  for module <- [CubDbStorage] do
+  for module <- [FileStorage] do
     module_name = module |> Module.split() |> List.last()
 
     describe "#{module_name}.list_shapes/1" do
@@ -547,8 +547,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
                      log_offset: @change_offset
                    }
                  ]
-                 |> Enum.map(&Changes.fill_key(&1, ["id"]))
-                 |> Enum.flat_map(&LogItems.from_change(&1, 0, ["id"]))
+                 |> changes_to_log_items()
 
       setup do
         {:ok, %{module: unquote(module)}}
@@ -575,7 +574,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
         storage.add_shape("shape-3", @shape, opts)
 
         storage.make_new_snapshot!("shape-1", @data_stream, opts)
-        storage.append_to_log!("shape-1", @log_items, @initial_log_state, opts)
+        storage.append_to_log!("shape-1", @log_items, opts)
 
         storage.make_new_snapshot!("shape-2", @data_stream, opts)
 
@@ -702,10 +701,10 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
     ]
   end
 
-  defp opts(CubDbStorage, %{tmp_dir: tmp_dir}) do
+  defp opts(FileStorage, %{tmp_dir: tmp_dir}) do
     [
-      db: String.to_atom("shape_cubdb_#{Utils.uuid4()}"),
-      file_path: tmp_dir
+      db: String.to_atom("shape_mixed_disk_#{Utils.uuid4()}"),
+      storage_dir: tmp_dir
     ]
   end
 end

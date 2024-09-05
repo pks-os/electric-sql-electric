@@ -4,6 +4,11 @@ import Dotenvy
 config :elixir, :time_zone_database, Tz.TimeZoneDatabase
 config :logger, level: :debug
 
+# uncomment if you need to track process creation and destruction
+# config :logger,
+#   handle_otp_reports: true,
+#   handle_sasl_reports: true
+
 if config_env() == :test, do: config(:logger, level: :info)
 
 if config_env() in [:dev, :test] do
@@ -71,8 +76,10 @@ cache_max_age = env!("CACHE_MAX_AGE", :integer, 60)
 cache_stale_age = env!("CACHE_STALE_AGE", :integer, 60 * 5)
 statsd_host = env!("STATSD_HOST", :string?, nil)
 
-cubdb_file_path = env!("CUBDB_FILE_PATH", :string, "./shapes")
-persistent_state_path = env!("PERSISTENT_STATE_FILE_PATH", :string, "./state")
+storage_dir = env!("STORAGE_DIR", :string, "./persistent")
+
+shape_path = Path.join(storage_dir, "./shapes")
+persistent_state_path = Path.join(storage_dir, "./state")
 
 persistent_kv =
   env!(
@@ -92,36 +99,33 @@ persistent_kv =
     {Electric.PersistentKV.Filesystem, :new!, root: persistent_state_path}
   )
 
-storage_opts = %{
-  chunk_bytes_threshold: env!("LOG_CHUNK_BYTES_THREHSOLD", :integer, 10_000)
-}
+chunk_bytes_threshold = env!("LOG_CHUNK_BYTES_THRESHOLD", :integer, 10_000)
 
-cub_db_opts = %{
-  file_path: cubdb_file_path
-}
-
-storage =
+{storage_mod, storage_opts} =
   env!(
     "STORAGE",
     fn storage ->
       case String.downcase(storage) do
         "memory" ->
-          {Electric.ShapeCache.InMemoryStorage, storage_opts}
+          {Electric.ShapeCache.InMemoryStorage, []}
 
-        "cubdb" ->
-          {Electric.ShapeCache.CubDbStorage, Map.merge(cub_db_opts, storage_opts)}
+        "file" ->
+          {Electric.ShapeCache.FileStorage, storage_dir: shape_path}
 
         _ ->
-          raise Dotenvy.Error, message: "storage must be one of: MEMORY, CUBDB"
+          raise Dotenvy.Error, message: "storage must be one of: MEMORY, FILE"
       end
     end,
-    {Electric.ShapeCache.CubDbStorage, Map.merge(cub_db_opts, storage_opts)}
+    {Electric.ShapeCache.FileStorage, storage_dir: shape_path}
   )
+
+storage = {storage_mod, storage_opts}
 
 config :electric,
   allow_shape_deletion: enable_integration_testing,
   cache_max_age: cache_max_age,
   cache_stale_age: cache_stale_age,
+  chunk_bytes_threshold: chunk_bytes_threshold,
   # Used in telemetry
   environment: config_env(),
   instance_id: instance_id,
