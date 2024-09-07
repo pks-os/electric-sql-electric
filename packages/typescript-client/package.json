@@ -1,6 +1,6 @@
 {
   "name": "@electric-sql/client",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "Postgres everywhere - your data, in sync, wherever you need it.",
   "type": "module",
   "main": "dist/cjs/index.cjs",
@@ -28,7 +28,7 @@
   "bugs": {
     "url": "https://github.com/electric-sql/electric/issues"
   },
-  "homepage": "https://next.electric-sql.com",
+  "homepage": "https://electric-sql.com",
   "dependencies": {},
   "devDependencies": {
     "@types/pg": "^8.11.6",
