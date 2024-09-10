@@ -75,7 +75,7 @@ onMounted(async () => {
   }
   .listing {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr;
     gap: 24px;
     margin: 24px 48px;
     overflow: hidden;
@@ -93,13 +93,13 @@ onMounted(async () => {
   }
   @media (max-width: 749px) {
     .listing {
+      grid-template-columns: 1fr;
       gap: 18px;
       margin: 20px 32px;
     }
   }
   @media (max-width: 549px) {
     .listing {
-      grid-template-columns: 1fr;
       margin: 20px 24px;
     }
   }
@@ -119,7 +119,7 @@ onMounted(async () => {
         <p>
           The latest news and updates from the ElectricSQL&nbsp;project.
         </p>
-        <p class="actions cta-actions">
+        <div class="actions cta-actions">
           <div class="action hidden-sm">
             <VPButton
                 href="https://discord.electric-sql.com"
@@ -148,7 +148,7 @@ onMounted(async () => {
                 theme="alt"
             />
           </div>
-        </p>
+        </div>
         <hr />
       </div>
       <div class="listing">

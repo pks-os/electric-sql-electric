@@ -1,12 +1,11 @@
 ---
 title: A new approach to building Electric
 description: >-
-  Electric Next is an experimental new approach to
-  building the ElectricSQL sync engine.
+  Electric Next is a new approach to building the ElectricSQL sync engine.
 excerpt: >-
-  Electric Next is an experimental new approach to building ElectricSQL.
+  Electric Next is a new approach that we've adopted to building Electric.
   One that's informed by the lessons learned building the previous system
-  and inspired by new insight from Kyle&nbsp;Mathews.
+  and inspired by new insight from Kyle Mathews.
 authors: [thruflo]
 image: /img/blog/electric-next/header.jpg
 tags: [release]
@@ -52,7 +51,7 @@ To go from core database replication technology to a viable solution for buildin
       </a>
     </div>
   </div>
-  <figcaption className="figure-caption text-end">
+  <figcaption class="figure-caption text-end">
     Schema evolution diagramme from the previous
     <a href="https://legacy.electric-sql.com/docs/reference/architecture" target="_blank">
       architecture&nbsp;page</a>.
@@ -132,7 +131,7 @@ We now see Electric as a sync engine that does partial replication on top of Pos
       </a>
     </div>
   </div>
-  <figcaption className="figure-caption text-end">
+  <figcaption class="figure-caption text-end">
     Diagramme illustrating core system responsibilities vs optional layers and integrations.
   </figcaption>
 </figure>
@@ -182,7 +181,7 @@ The previous Electric supported a single primary write-path pattern &mdash; [wri
       </a>
     </div>
   </div>
-  <figcaption className="figure-caption text-end">
+  <figcaption class="figure-caption text-end">
     Data flow diagramme from the previous
     <a href="https://legacy.electric-sql.com/docs/reference/architecture" target="_blank">
       architecture&nbsp;page</a>.
@@ -229,7 +228,7 @@ The core use case for Electric is to sync subsets of data out of Postgres into l
       </a>
     </div>
   </div>
-  <figcaption className="figure-caption text-end">
+  <figcaption class="figure-caption text-end">
     Diagramme illustrating the use-cases and environments you can sync data into with Electric.
   </figcaption>
 </figure>
@@ -245,7 +244,7 @@ You can sync data into:
   <video controls="true" poster="https://electric-sql.com/videos/blog/local-first-ai-with-tauri-postgres-pgvector-llama/intro.jpg">
       <source src="https://electric-sql.com/videos/blog/local-first-ai-with-tauri-postgres-pgvector-llama/intro.mp4" />
   </video>
-  <figcaption className="figure-caption text-end">
+  <figcaption class="figure-caption text-end">
     Video demonstrating
     <a href="/blog/2024/02/05/local-first-ai-with-tauri-postgres-pgvector-llama" target="_blank">
       hybrid vector-relational sync for local RAG applications</a>.
