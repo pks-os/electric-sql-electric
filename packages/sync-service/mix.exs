@@ -22,7 +22,11 @@ defmodule Electric.MixProject do
       releases: [
         electric: [
           applications: [
-            electric: :permanent
+            electric: :permanent,
+            # This order of application is important to ensure proper startup sequence of
+            # application dependencies, namely, inets.
+            opentelemetry_exporter: :permanent,
+            opentelemetry: :temporary
           ],
           include_executables_for: [:unix]
         ]

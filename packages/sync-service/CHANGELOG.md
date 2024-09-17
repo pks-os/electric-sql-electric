@@ -1,5 +1,23 @@
 # @core/sync-service
 
+## 0.5.1
+
+### Patch Changes
+
+- 0b8fbc4: Run filter logic for PG version 15 in unit tests.
+- aaf9c75: Clean up underlying shape data when cleaning up shape.
+
+## 0.5.0
+
+### Minor Changes
+
+- c842835: Detect when Electric is connected to a different Postgres DB than before and clean all shapes.
+
+### Patch Changes
+
+- fd6b88f: Change default chunk size to ~10MB uncompressed.
+- 66ee2ae: Add OpenTelemetry spans for HTTP request handling and replication message processing.
+
 ## 0.4.4
 
 ### Patch Changes

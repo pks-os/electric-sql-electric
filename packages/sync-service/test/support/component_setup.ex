@@ -48,14 +48,14 @@ defmodule Support.ComponentSetup do
   end
 
   def with_log_chunking(_ctx) do
-    %{chunk_bytes_threshold: 10_000}
+    %{chunk_bytes_threshold: Electric.ShapeCache.LogChunker.default_chunk_size_threshold()}
   end
 
   def with_shape_cache(ctx, additional_opts \\ []) do
     shape_meta_table = :"shape_meta_#{full_test_name(ctx)}"
     server = :"shape_cache_#{full_test_name(ctx)}"
     consumer_supervisor = :"consumer_supervisor_#{full_test_name(ctx)}"
-    get_pg_version = fn -> 14 end
+    get_pg_version = fn -> Application.fetch_env!(:electric, :major_pg_version_for_tests) end
 
     start_opts =
       [
@@ -76,7 +76,6 @@ defmodule Support.ComponentSetup do
         {
           Electric.Postgres.Configuration,
           :configure_tables_for_replication!,
-          # TODO: can pass PG version here, then in Application also pass it there, or pass a function that returns the version
           [get_pg_version, ctx.publication_name]
         }
       end)
@@ -104,16 +103,14 @@ defmodule Support.ComponentSetup do
   end
 
   def with_shape_log_collector(ctx) do
-    name = :"shape_log_collector_#{full_test_name(ctx)}"
-
     {:ok, _} =
       ShapeLogCollector.start_link(
-        name: name,
+        electric_instance_id: ctx.electric_instance_id,
         inspector: ctx.inspector,
         link_consumers: Map.get(ctx, :link_log_collector, true)
       )
 
-    %{shape_log_collector: name}
+    %{shape_log_collector: ShapeLogCollector.name(ctx.electric_instance_id)}
   end
 
   def with_replication_client(ctx) do

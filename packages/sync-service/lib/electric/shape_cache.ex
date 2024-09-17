@@ -55,10 +55,7 @@ defmodule Electric.ShapeCache do
               type: :atom,
               default: @default_shape_meta_table
             ],
-            log_producer: [
-              type: {:or, [:atom, :pid]},
-              default: Electric.Replication.ShapeLogCollector
-            ],
+            log_producer: [type: @genserver_name_schema, required: true],
             consumer_supervisor: [type: @genserver_name_schema, required: true],
             storage: [type: :mod_arg, required: true],
             chunk_bytes_threshold: [type: :non_neg_integer, required: true],
@@ -146,7 +143,7 @@ defmodule Electric.ShapeCache do
   @spec clean_all_shapes(keyword()) :: :ok
   def clean_all_shapes(opts) do
     server = Access.get(opts, :server, __MODULE__)
-    GenServer.call(server, {:clean_all})
+    GenStage.call(server, {:clean_all})
   end
 
   @impl Electric.ShapeCacheBehaviour
@@ -329,7 +326,7 @@ defmodule Electric.ShapeCache do
   def handle_call({:clean_all}, _from, state) do
     Logger.info("Cleaning up all shapes")
     clean_up_all_shapes(state)
-    {:reply, :ok, state}
+    {:reply, :ok, [], state}
   end
 
   @impl GenStage
@@ -368,6 +365,11 @@ defmodule Electric.ShapeCache do
   end
 
   defp clean_up_shape(state, shape_id) do
+    if state.shape_status.get_existing_shape(state.persistent_state, shape_id) !== nil do
+      shape_opts = Electric.ShapeCache.Storage.for_shape(shape_id, state.storage)
+      Electric.ShapeCache.Storage.cleanup!(shape_opts)
+    end
+
     Electric.Shapes.ConsumerSupervisor.stop_shape_consumer(
       state.consumer_supervisor,
       state.electric_instance_id,
