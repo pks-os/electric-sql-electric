@@ -115,7 +115,7 @@ describe(`HTTP Sync`, () => {
       `${BASE_URL}/v1/shape/${issuesTableUrl}?offset=-1`,
       {}
     )
-    const shapeId = res.headers.get(`x-electric-shape-id`)
+    const shapeId = res.headers.get(`electric-shape-id`)
     expect(shapeId).to.exist
   })
 
@@ -126,7 +126,7 @@ describe(`HTTP Sync`, () => {
       `${BASE_URL}/v1/shape/${issuesTableUrl}?offset=-1`,
       {}
     )
-    const lastOffset = res.headers.get(`x-electric-chunk-last-offset`)
+    const lastOffset = res.headers.get(`electric-chunk-last-offset`)
     expect(lastOffset).to.exist
   })
 
@@ -374,6 +374,47 @@ describe(`HTTP Sync`, () => {
     )
   })
 
+  it(`should wait for processing before advancing stream`, async ({
+    aborter,
+    issuesTableUrl,
+
+    insertIssues,
+  }) => {
+    // With initial data
+    await insertIssues({ id: uuidv4(), title: `original insert` })
+
+    const fetchWrapper = vi
+      .fn()
+      .mockImplementation((...args: Parameters<typeof fetch>) => {
+        return fetch(...args)
+      })
+
+    const shapeData = new Map()
+    const issueStream = new ShapeStream({
+      url: `${BASE_URL}/v1/shape/${issuesTableUrl}`,
+      signal: aborter.signal,
+      fetchClient: fetchWrapper,
+    })
+
+    await h.forEachMessage(issueStream, aborter, async (res, msg, nth) => {
+      if (!isChangeMessage(msg)) return
+      shapeData.set(msg.key, msg.value)
+
+      if (nth === 0) {
+        expect(fetchWrapper).toHaveBeenCalledTimes(1)
+
+        // ensure fetch has not been called again while
+        // waiting for processing
+        await insertIssues({ title: `foo1` })
+        await sleep(100)
+        expect(fetchWrapper).toHaveBeenCalledTimes(1)
+      } else if (nth === 1) {
+        expect(fetchWrapper).toHaveBeenCalledTimes(2)
+        res()
+      }
+    })
+  })
+
   it(`multiple clients can get the same data in parallel`, async ({
     issuesTableUrl,
     updateIssue,
@@ -537,7 +578,7 @@ describe(`HTTP Sync`, () => {
     const midMessage = messages.slice(-6)[0]
     assert(`offset` in midMessage)
     const midOffset = midMessage.offset
-    const shapeId = res.headers.get(`x-electric-shape-id`)
+    const shapeId = res.headers.get(`electric-shape-id`)
     const etag = res.headers.get(`etag`)
     assert(etag !== null, `Response should have etag header`)
 
