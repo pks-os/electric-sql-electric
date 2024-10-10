@@ -66,7 +66,6 @@ defmodule Support.ComponentSetup do
         storage: ctx.storage,
         chunk_bytes_threshold: ctx.chunk_bytes_threshold,
         db_pool: ctx.pool,
-        persistent_kv: ctx.persistent_kv,
         registry: ctx.registry,
         log_producer: ctx.shape_log_collector,
         consumer_supervisor: consumer_supervisor
@@ -90,6 +89,7 @@ defmodule Support.ComponentSetup do
 
     shape_cache_opts = [
       server: server,
+      electric_instance_id: ctx.electric_instance_id,
       shape_meta_table: shape_meta_table,
       storage: ctx.storage
     ]
