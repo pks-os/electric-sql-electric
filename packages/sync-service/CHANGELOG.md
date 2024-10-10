@@ -1,5 +1,12 @@
 # @core/sync-service
 
+## 0.7.2
+
+### Patch Changes
+
+- 8ad40e7: Make relation OID part of shape definition, removing the need for persisting relations and simplifying relation change handling.
+- 14681cc: Store shape definitions along with shape data and use that to restore them instead of persisted cached metadata. This removes the unified serilization and persistence of all shape metadata and allows better scaling of speed of shape creation.
+
 ## 0.7.1
 
 ### Patch Changes
