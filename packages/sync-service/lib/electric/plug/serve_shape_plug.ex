@@ -26,13 +26,18 @@ defmodule Electric.Plug.ServeShapePlug do
   defmodule TimeUtils do
     @oct9th2024 DateTime.from_naive!(~N[2024-10-09 00:00:00], "Etc/UTC")
     def seconds_since_oct9th_2024_next_interval(conn) do
-      long_poll_timeout = floor(conn.assigns.config[:long_poll_timeout] / 1000)
-      now = DateTime.utc_now()
+      case div(conn.assigns.config[:long_poll_timeout], 1000) do
+        0 ->
+          0
 
-      diff_in_seconds = DateTime.diff(now, @oct9th2024, :second)
-      next_interval = ceil(diff_in_seconds / long_poll_timeout) * long_poll_timeout
+        long_poll_timeout_sec ->
+          now = DateTime.utc_now()
 
-      next_interval
+          diff_in_seconds = DateTime.diff(now, @oct9th2024, :second)
+          next_interval = ceil(diff_in_seconds / long_poll_timeout_sec) * long_poll_timeout_sec
+
+          next_interval
+      end
     end
   end
 
@@ -48,6 +53,7 @@ defmodule Electric.Plug.ServeShapePlug do
       field(:shape_id, :string)
       field(:live, :boolean, default: false)
       field(:where, :string)
+      field(:columns, :string)
       field(:shape_definition, :string)
     end
 
@@ -58,6 +64,7 @@ defmodule Electric.Plug.ServeShapePlug do
       )
       |> validate_required([:root_table, :offset])
       |> cast_offset()
+      |> cast_columns()
       |> validate_shape_id_with_offset()
       |> validate_live_with_offset()
       |> cast_root_table(opts)
@@ -90,6 +97,21 @@ defmodule Electric.Plug.ServeShapePlug do
       end
     end
 
+    def cast_columns(%Ecto.Changeset{valid?: false} = changeset), do: changeset
+
+    def cast_columns(%Ecto.Changeset{} = changeset) do
+      case fetch_field!(changeset, :columns) do
+        nil ->
+          changeset
+
+        columns ->
+          case Electric.Plug.Utils.parse_columns_param(columns) do
+            {:ok, parsed_cols} -> put_change(changeset, :columns, parsed_cols)
+            {:error, reason} -> add_error(changeset, :columns, reason)
+          end
+      end
+    end
+
     def validate_shape_id_with_offset(%Ecto.Changeset{valid?: false} = changeset), do: changeset
 
     def validate_shape_id_with_offset(%Ecto.Changeset{} = changeset) do
@@ -117,18 +139,19 @@ defmodule Electric.Plug.ServeShapePlug do
     def cast_root_table(%Ecto.Changeset{} = changeset, opts) do
       table = fetch_change!(changeset, :root_table)
       where = fetch_field!(changeset, :where)
+      columns = get_change(changeset, :columns, nil)
 
-      case Shapes.Shape.new(table, opts ++ [where: where]) do
+      case Shapes.Shape.new(table, opts ++ [where: where, columns: columns]) do
         {:ok, result} ->
           put_change(changeset, :shape_definition, result)
 
-        {:error, reasons} ->
+        {:error, {field, reasons}} ->
           Enum.reduce(List.wrap(reasons), changeset, fn
             {message, keys}, changeset ->
-              add_error(changeset, :root_table, message, keys)
+              add_error(changeset, field, message, keys)
 
             message, changeset when is_binary(message) ->
-              add_error(changeset, :root_table, message)
+              add_error(changeset, field, message)
           end)
       end
     end
