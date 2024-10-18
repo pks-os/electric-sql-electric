@@ -9,7 +9,7 @@ end
 
 log_level_config =
   env!("LOG_LEVEL", :string, "info")
-  |> Electric.Config.parse_log_level()
+  |> Electric.ConfigParser.parse_log_level()
 
 case log_level_config do
   {:ok, log_level} ->
@@ -94,7 +94,7 @@ connection_opts =
   else
     {:ok, database_url_config} =
       env!("DATABASE_URL", :string)
-      |> Electric.Config.parse_postgresql_uri()
+      |> Electric.ConfigParser.parse_postgresql_uri()
 
     database_ipv6_config =
       env!("DATABASE_USE_IPV6", :boolean, false)
@@ -150,6 +150,14 @@ chunk_bytes_threshold =
         "file" ->
           {Electric.ShapeCache.FileStorage,
            storage_dir: shape_path, electric_instance_id: electric_instance_id}
+
+        "crashing_file" ->
+          num_calls_until_crash = env!("CRASHING_FILE_STORAGE__NUM_CALLS_UNTIL_CRASH", :integer)
+
+          {Electric.ShapeCache.CrashingFileStorage,
+           storage_dir: shape_path,
+           electric_instance_id: electric_instance_id,
+           num_calls_until_crash: num_calls_until_crash}
 
         _ ->
           raise Dotenvy.Error, message: "storage must be one of: MEMORY, FILE"

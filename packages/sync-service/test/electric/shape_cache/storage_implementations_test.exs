@@ -10,7 +10,6 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
   alias Electric.Utils
 
   import Support.TestUtils
-  import Support.ComponentSetup, only: [with_electric_instance_id: 1]
 
   @moduletag :tmp_dir
 
@@ -534,12 +533,9 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
   end
 
   defp start_storage(%{module: module} = context) do
-    {:ok, opts} = module |> opts(context) |> module.shared_opts()
-
+    opts = module |> opts(context) |> module.shared_opts()
     shape_opts = module.for_shape(@shape_id, opts)
-
     {:ok, _} = module.start_link(shape_opts)
-
     {:ok, %{module: module, opts: shape_opts}}
   end
 

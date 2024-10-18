@@ -3,6 +3,7 @@ defmodule Electric.Postgres.ReplicationClientTest do
 
   import Support.DbSetup, except: [with_publication: 1]
   import Support.DbStructureSetup
+  import Support.TestUtils, only: [with_electric_instance_id: 1]
 
   alias Electric.Postgres.Lsn
   alias Electric.Postgres.ReplicationClient
@@ -18,22 +19,36 @@ defmodule Electric.Postgres.ReplicationClientTest do
   @publication_name "test_electric_publication"
   @slot_name "test_electric_slot"
 
+  setup do
+    # Spawn a dummy process to serve as the black hole for the messages that
+    # ReplicationClient normally sends to Connection.Manager.
+    pid =
+      spawn_link(fn ->
+        receive do
+          _ -> :ok
+        end
+      end)
+
+    %{dummy_pid: pid}
+  end
+
+  setup :with_electric_instance_id
+
   describe "ReplicationClient init" do
     setup [:with_unique_db, :with_basic_tables]
 
-    test "creates an empty publication on startup if requested", %{
-      db_config: config,
-      db_conn: conn
-    } do
+    test "creates an empty publication on startup if requested",
+         %{db_conn: conn, dummy_pid: dummy_pid} = ctx do
       replication_opts = [
         publication_name: @publication_name,
         try_creating_publication?: true,
         slot_name: @slot_name,
         transaction_received: nil,
-        relation_received: nil
+        relation_received: nil,
+        connection_manager: dummy_pid
       ]
 
-      assert {:ok, _} = ReplicationClient.start_link(config, replication_opts)
+      start_client(ctx, replication_opts: replication_opts)
 
       assert %{rows: [[@publication_name]]} =
                Postgrex.query!(conn, "SELECT pubname FROM pg_publication", [])
@@ -45,20 +60,18 @@ defmodule Electric.Postgres.ReplicationClientTest do
   describe "ReplicationClient against real db" do
     setup [:with_unique_db, :with_basic_tables, :with_publication, :with_replication_opts]
 
-    test "calls a provided function when receiving it from the PG",
-         %{db_config: config, replication_opts: replication_opts, db_conn: conn} do
-      assert {:ok, _pid} = ReplicationClient.start_link(config, replication_opts)
+    test "calls a provided function when receiving it from the PG", %{db_conn: conn} = ctx do
+      start_client(ctx)
 
       insert_item(conn, "test value")
 
       assert %NewRecord{record: %{"value" => "test value"}} = receive_tx_change()
     end
 
-    test "logs a message when connected & replication has started",
-         %{db_config: config, replication_opts: replication_opts, db_conn: conn} do
+    test "logs a message when connected & replication has started", %{db_conn: conn} = ctx do
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert {:ok, _pid} = ReplicationClient.start_link(config, replication_opts)
+          start_client(ctx)
 
           insert_item(conn, "test value")
 
@@ -68,20 +81,13 @@ defmodule Electric.Postgres.ReplicationClientTest do
       log =~ "Started replication from postgres"
     end
 
-    test "works with an existing publication", %{
-      db_config: config,
-      replication_opts: replication_opts
-    } do
+    test "works with an existing publication", %{replication_opts: replication_opts} = ctx do
       replication_opts = Keyword.put(replication_opts, :try_creating_publication?, true)
-      assert {:ok, _} = ReplicationClient.start_link(config, replication_opts)
+      start_client(ctx, replication_opts: replication_opts)
     end
 
-    test "works with an existing replication slot", %{
-      db_config: config,
-      replication_opts: replication_opts,
-      db_conn: conn
-    } do
-      {:ok, pid} = ReplicationClient.start_link(config, replication_opts)
+    test "works with an existing replication slot", %{db_conn: conn} = ctx do
+      {:ok, pid} = start_client(ctx)
 
       assert %{
                "slot_name" => @slot_name,
@@ -97,18 +103,14 @@ defmodule Electric.Postgres.ReplicationClientTest do
                fetch_slot_info(conn)
 
       # Check that the replication client works when the replication slot already exists
-      {:ok, _pid} = ReplicationClient.start_link(config, replication_opts)
+      start_client(ctx)
 
       assert %{"slot_name" => @slot_name, "confirmed_flush_lsn" => ^flush_lsn} =
                fetch_slot_info(conn)
     end
 
-    test "can replay already seen transaction", %{
-      db_config: config,
-      replication_opts: replication_opts,
-      db_conn: conn
-    } do
-      assert {:ok, pid} = ReplicationClient.start_link(config, replication_opts)
+    test "can replay already seen transaction", %{db_conn: conn} = ctx do
+      {:ok, pid} = start_client(ctx)
 
       insert_item(conn, "test value")
       assert %NewRecord{record: %{"value" => "test value"}} = receive_tx_change()
@@ -135,7 +137,7 @@ defmodule Electric.Postgres.ReplicationClientTest do
 
       # Now, when we restart the connection process, it replays transactions from the last
       # confirmed one
-      assert {:ok, _pid} = ReplicationClient.start_link(config, replication_opts)
+      start_client(ctx)
 
       assert %NewRecord{record: %{"value" => "return: not ok"}} = receive_tx_change()
       assert %NewRecord{record: %{"value" => ^interrupt_val}} = receive_tx_change()
@@ -144,12 +146,9 @@ defmodule Electric.Postgres.ReplicationClientTest do
     end
 
     # Regression test for https://github.com/electric-sql/electric/issues/1548
-    test "fares well when multiple concurrent transactions are writing to WAL", %{
-      db_config: config,
-      replication_opts: replication_opts,
-      db_conn: conn
-    } do
-      assert {:ok, _pid} = ReplicationClient.start_link(config, replication_opts)
+    test "fares well when multiple concurrent transactions are writing to WAL",
+         %{db_conn: conn} = ctx do
+      start_client(ctx)
 
       num_txn = 2
       num_ops = 8
@@ -201,12 +200,8 @@ defmodule Electric.Postgres.ReplicationClientTest do
          ]
     @tag additional_fields:
            "date DATE, timestamptz TIMESTAMPTZ, float FLOAT8, bytea BYTEA, interval INTERVAL"
-    test "returns data formatted according to display settings", %{
-      db_config: config,
-      replication_opts: replication_opts,
-      db_conn: conn
-    } do
-      assert {:ok, _} = ReplicationClient.start_link(config, replication_opts)
+    test "returns data formatted according to display settings", %{db_conn: conn} = ctx do
+      start_client(ctx)
 
       Postgrex.query!(
         conn,
@@ -250,7 +245,7 @@ defmodule Electric.Postgres.ReplicationClientTest do
   describe "ReplicationClient against real db (toast)" do
     setup [:with_unique_db, :with_basic_tables, :with_publication, :with_replication_opts]
 
-    setup %{db_config: config, replication_opts: replication_opts, db_conn: conn} do
+    setup %{db_conn: conn} = ctx do
       Postgrex.query!(
         conn,
         "CREATE TABLE items2 (id UUID PRIMARY KEY, val1 TEXT, val2 TEXT, num INTEGER)",
@@ -259,7 +254,7 @@ defmodule Electric.Postgres.ReplicationClientTest do
 
       Postgrex.query!(conn, "ALTER TABLE items2 REPLICA IDENTITY FULL", [])
 
-      assert {:ok, _pid} = ReplicationClient.start_link(config, replication_opts)
+      start_client(ctx)
 
       :ok
     end
@@ -321,7 +316,7 @@ defmodule Electric.Postgres.ReplicationClientTest do
     end
   end
 
-  test "correctly responds to a status update request message from PG" do
+  test "correctly responds to a status update request message from PG", ctx do
     pg_wal = lsn_to_wal("0/10")
 
     state =
@@ -330,7 +325,8 @@ defmodule Electric.Postgres.ReplicationClientTest do
         relation_received: nil,
         publication_name: "",
         try_creating_publication?: false,
-        slot_name: ""
+        slot_name: "",
+        connection_manager: ctx.dummy_pid
       )
 
     # All offsets are 0+1 until we've processed a transaction and bumped `state.applied_wal`.
@@ -352,14 +348,15 @@ defmodule Electric.Postgres.ReplicationClientTest do
     :ok
   end
 
-  defp with_replication_opts(_) do
+  defp with_replication_opts(ctx) do
     %{
       replication_opts: [
         publication_name: @publication_name,
         try_creating_publication?: false,
         slot_name: @slot_name,
         transaction_received: {__MODULE__, :test_transaction_received, [self()]},
-        relation_received: {__MODULE__, :test_relation_received, [self()]}
+        relation_received: {__MODULE__, :test_relation_received, [self()]},
+        connection_manager: ctx.dummy_pid
       ]
     }
   end
@@ -433,5 +430,12 @@ defmodule Electric.Postgres.ReplicationClientTest do
   defp receive_tx_change do
     assert_receive {:from_replication, %Transaction{changes: [change]}}
     change
+  end
+
+  defp start_client(ctx, overrides \\ []) do
+    ctx = Enum.into(overrides, ctx)
+
+    {:ok, _pid} =
+      ReplicationClient.start_link(ctx.electric_instance_id, ctx.db_config, ctx.replication_opts)
   end
 end
