@@ -1,5 +1,15 @@
 # @core/sync-service
 
+## 0.7.8
+
+### Patch Changes
+
+- 1cf8bf9: Fix `REPLICATION_STREAM_ID` not being able to be set because of incorrect parsing
+- c4d118d: Add `CLEANUP_REPLICATION_SLOTS_ON_SHUTDOWN` env var option to configure whether temporary replication slots are used, to allow easier cleanups on test deploys
+- b110ed9: Update acknowledged WAL on keep alive messages
+- 52caf48: Update OpenTelemetry dependencies
+- 85618d0: Fix a possible deadlock issue when creating or updating multiple where-claused shapes that occured while updating the Postgres publication (only on PG 15+). Fix a possible race condition between reading the existing publication and writing the updated version.
+
 ## 0.7.7
 
 ### Patch Changes
