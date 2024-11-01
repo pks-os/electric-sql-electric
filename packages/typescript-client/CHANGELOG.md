@@ -1,5 +1,13 @@
 # @electric-sql/client
 
+## 0.7.0
+
+### Minor Changes
+
+- 61a18bd: - Implement `rows` and `currentRows` getters on `Shape` interface for easier data access.
+  - [BREAKING] Rename `valueSync` getter on `Shape` to `currentValue` for clarity and consistency.
+  - [BREAKING] Change `subscribe` API on `Shape` to accept callbacks with signature `({ rows: T[], value: Map<string, T> }) => void`
+
 ## 0.6.5
 
 ### Patch Changes
