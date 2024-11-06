@@ -22,17 +22,17 @@
   ??INSERT 0 2
 
 ## Start the sync service with the CrashingFileStorage storage backend.
-[invoke setup_electric_with_env "STORAGE=crashing_file CRASHING_FILE_STORAGE__NUM_CALLS_UNTIL_CRASH=2"]
+[invoke setup_electric_with_env "ELECTRIC_STORAGE=crashing_file CRASHING_FILE_ELECTRIC_STORAGE__NUM_CALLS_UNTIL_CRASH=2"]
 
 [shell electric]
  ??[info] Starting replication from postgres
 
 ## Initialize a couple of shapes so that Electric starts processing transactions from Postgres
 [shell client]
-  !curl -i http://localhost:3000/v1/shape/roots?offset=-1
+  !curl -i "http://localhost:3000/v1/shape?table=roots&offset=-1"
   ??200 OK
 
-  !curl -i http://localhost:3000/v1/shape/leaves?offset=-1
+  !curl -i "http://localhost:3000/v1/shape?table=leaves&offset=-1"
   ??200 OK
 
 ## Commit enough new transactions for shape storage to hit the simulated failure.
@@ -75,15 +75,15 @@
   ?Txn received in Shapes.Consumer: %Electric.Replication.Changes.Transaction{xid: $xid
 
   # Both consumers hit their call limit and exit with simulated storage failures.
-  ?\[error\] GenServer {Electric\.Registry\.Processes, {Electric\.Shapes\.Consumer, :default, "[0-9-]+"}} terminating
+  ?\[error\] GenServer {Electric\.Registry\.Processes, {Electric\.Shapes\.Consumer, :default, "integration_test_tenant", "[0-9-]+"}} terminating
   ??Simulated storage failure
-  ?\[error\] GenServer {Electric\.Registry\.Processes, {Electric\.Shapes\.Consumer, :default, "[0-9-]+"}} terminating
+  ?\[error\] GenServer {Electric\.Registry\.Processes, {Electric\.Shapes\.Consumer, :default, "integration_test_tenant", "[0-9-]+"}} terminating
   ??Simulated storage failure
 
   # The log collector process and the replication client both exit, as their lifetimes are tied
   # together by the supervision tree design.
-  ??[error] GenServer {Electric.Registry.Processes, {Electric.Replication.ShapeLogCollector, :default}} terminating
-  ??[error] :gen_statem {Electric.Registry.Processes, {Electric.Postgres.ReplicationClient, :default}} terminating
+  ??[error] GenServer {Electric.Registry.Processes, {Electric.Replication.ShapeLogCollector, :default, "integration_test_tenant"}} terminating
+  ??[error] :gen_statem {Electric.Registry.Processes, {Electric.Postgres.ReplicationClient, :default, "integration_test_tenant"}} terminating
 
   # Observe that both shape consumers and the replication client have restarted.
   ??[debug] Found existing replication slot

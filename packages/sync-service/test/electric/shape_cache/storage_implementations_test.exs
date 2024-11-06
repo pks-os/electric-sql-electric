@@ -13,7 +13,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
 
   @moduletag :tmp_dir
 
-  @shape_id "the-shape-id"
+  @shape_handle "the-shape-handle"
   @shape %Shape{
     root_table: {"public", "items"},
     root_table_id: 1,
@@ -24,6 +24,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
       }
     }
   }
+  @tenant_id "test_tenant"
 
   @snapshot_offset LogOffset.first()
   @snapshot_offset_encoded to_string(@snapshot_offset)
@@ -526,7 +527,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
         storage.initialise(opts)
         storage.set_shape_definition(@shape, opts)
 
-        assert {:ok, %{@shape_id => @shape}} =
+        assert {:ok, %{@shape_handle => @shape}} =
                  Electric.ShapeCache.Storage.get_all_stored_shapes({storage, opts})
       end
     end
@@ -534,7 +535,7 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
 
   defp start_storage(%{module: module} = context) do
     opts = module |> opts(context) |> module.shared_opts()
-    shape_opts = module.for_shape(@shape_id, opts)
+    shape_opts = module.for_shape(@shape_handle, @tenant_id, opts)
     {:ok, _} = module.start_link(shape_opts)
     {:ok, %{module: module, opts: shape_opts}}
   end
@@ -544,7 +545,8 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
       snapshot_ets_table: String.to_atom("snapshot_ets_table_#{Utils.uuid4()}"),
       log_ets_table: String.to_atom("log_ets_table_#{Utils.uuid4()}"),
       chunk_checkpoint_ets_table: String.to_atom("chunk_checkpoint_ets_table_#{Utils.uuid4()}"),
-      electric_instance_id: electric_instance_id
+      electric_instance_id: electric_instance_id,
+      tenant_id: @tenant_id
     ]
   end
 
@@ -552,7 +554,8 @@ defmodule Electric.ShapeCache.StorageImplimentationsTest do
     [
       db: String.to_atom("shape_mixed_disk_#{Utils.uuid4()}"),
       storage_dir: tmp_dir,
-      electric_instance_id: electric_instance_id
+      electric_instance_id: electric_instance_id,
+      tenant_id: @tenant_id
     ]
   end
 end

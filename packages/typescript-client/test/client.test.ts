@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { testWithIssuesTable as it } from './support/test-context'
 import { ShapeStream, Shape, FetchError } from '../src'
+import { Message, Row, ChangeMessage } from '../src/types'
 
 const BASE_URL = inject(`baseUrl`)
 
@@ -10,7 +11,8 @@ describe(`Shape`, () => {
   it(`should sync an empty shape`, async ({ issuesTableUrl }) => {
     const start = Date.now()
     const shapeStream = new ShapeStream({
-      url: `${BASE_URL}/v1/shape/${issuesTableUrl}`,
+      url: `${BASE_URL}/v1/shape`,
+      table: issuesTableUrl,
     })
     const shape = new Shape(shapeStream)
 
@@ -30,7 +32,8 @@ describe(`Shape`, () => {
 
     const start = Date.now()
     const shapeStream = new ShapeStream({
-      url: `${BASE_URL}/v1/shape/${issuesTableUrl}`,
+      url: `${BASE_URL}/v1/shape`,
+      table: issuesTableUrl,
       signal: aborter.signal,
     })
     const shape = new Shape(shapeStream)
@@ -64,7 +67,8 @@ describe(`Shape`, () => {
 
     const start = Date.now()
     const shapeStream = new ShapeStream({
-      url: `${BASE_URL}/v1/shape/${issuesTableUrl}`,
+      url: `${BASE_URL}/v1/shape`,
+      table: issuesTableUrl,
       signal: aborter.signal,
     })
     const shape = new Shape(shapeStream)
@@ -145,7 +149,7 @@ describe(`Shape`, () => {
         await deleteIssue({ id: id1, title: `foo1` })
         await insertIssues({ id: id2, title: `foo2` })
         await sleep(100)
-        await clearIssuesShape(shapeStream.shapeId)
+        await clearIssuesShape(shapeStream.shapeHandle)
 
         rotationTime = Date.now()
       }
@@ -156,7 +160,8 @@ describe(`Shape`, () => {
     }
 
     const shapeStream = new ShapeStream({
-      url: `${BASE_URL}/v1/shape/${issuesTableUrl}`,
+      url: `${BASE_URL}/v1/shape`,
+      table: issuesTableUrl,
       signal: aborter.signal,
       fetchClient: fetchWrapper,
     })
@@ -192,7 +197,8 @@ describe(`Shape`, () => {
 
     const start = Date.now()
     const shapeStream = new ShapeStream({
-      url: `${BASE_URL}/v1/shape/${issuesTableUrl}`,
+      url: `${BASE_URL}/v1/shape`,
+      table: issuesTableUrl,
       signal: aborter.signal,
     })
     const shape = new Shape(shapeStream)
@@ -226,7 +232,8 @@ describe(`Shape`, () => {
 
   it(`should support unsubscribe`, async ({ issuesTableUrl }) => {
     const shapeStream = new ShapeStream({
-      url: `${BASE_URL}/v1/shape/${issuesTableUrl}`,
+      url: `${BASE_URL}/v1/shape`,
+      table: issuesTableUrl,
     })
     const shape = new Shape(shapeStream)
 
@@ -242,7 +249,8 @@ describe(`Shape`, () => {
   it(`should expose connection status`, async ({ issuesTableUrl }) => {
     const aborter = new AbortController()
     const shapeStream = new ShapeStream({
-      url: `${BASE_URL}/v1/shape/${issuesTableUrl}`,
+      url: `${BASE_URL}/v1/shape`,
+      table: issuesTableUrl,
       signal: aborter.signal,
     })
 
@@ -266,7 +274,8 @@ describe(`Shape`, () => {
   }) => {
     let fetchShouldFail = false
     const shapeStream = new ShapeStream({
-      url: `${BASE_URL}/v1/shape/${issuesTableUrl}`,
+      url: `${BASE_URL}/v1/shape`,
+      table: issuesTableUrl,
       fetchClient: async (_input, _init) => {
         if (fetchShouldFail)
           throw new FetchError(
@@ -301,7 +310,8 @@ describe(`Shape`, () => {
     issuesTableUrl,
   }) => {
     const shapeStream = new ShapeStream({
-      url: `${BASE_URL}/v1/shape/${issuesTableUrl}`,
+      url: `${BASE_URL}/v1/shape`,
+      table: issuesTableUrl,
       subscribe: false,
     })
 
@@ -314,7 +324,8 @@ describe(`Shape`, () => {
 
   it(`should expose isLoading status`, async ({ issuesTableUrl }) => {
     const shapeStream = new ShapeStream({
-      url: `${BASE_URL}/v1/shape/${issuesTableUrl}`,
+      url: `${BASE_URL}/v1/shape`,
+      table: issuesTableUrl,
       fetchClient: async (input, init) => {
         await sleep(20)
         return fetch(input, init)
@@ -326,5 +337,50 @@ describe(`Shape`, () => {
     await sleep(200) // give some time for the initial fetch to complete
 
     expect(shapeStream.isLoading()).false
+  })
+
+  it(`should honour replica: full`, async ({
+    insertIssues,
+    updateIssue,
+    issuesTableUrl,
+    clearIssuesShape,
+    aborter,
+  }) => {
+    const [id] = await insertIssues({ title: `first title` })
+
+    const shapeStream = new ShapeStream({
+      url: `${BASE_URL}/v1/shape`,
+      table: issuesTableUrl,
+      replica: `full`,
+      signal: aborter.signal,
+    })
+    try {
+      await new Promise((resolve) => {
+        shapeStream.subscribe(resolve)
+      })
+
+      await sleep(200)
+      await updateIssue({ id: id, title: `updated title` })
+
+      const msgs: Message<Row>[] = await new Promise((resolve) => {
+        shapeStream.subscribe(resolve)
+      })
+
+      const expectedValue = {
+        id: id,
+        title: `updated title`,
+        // because we're sending the full row, the update will include the
+        // unchanged `priority` column
+        priority: 10,
+      }
+
+      const changeMsg: ChangeMessage<Row> = msgs[0] as ChangeMessage<Row>
+      expect(changeMsg.headers.operation).toEqual(`update`)
+      expect(changeMsg.value).toEqual(expectedValue)
+    } finally {
+      // the normal cleanup doesn't work because our shape definition is
+      // changed by the updates: 'full' param
+      await clearIssuesShape(shapeStream.shapeHandle)
+    }
   })
 })

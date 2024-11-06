@@ -47,6 +47,98 @@ defmodule Electric.Plug.Utils do
     end)
   end
 
+  @doc """
+  Calculate the next interval that should be used for long polling based on the
+  current time and previous interval used.
+  """
+  @oct9th2024 DateTime.from_naive!(~N[2024-10-09 00:00:00], "Etc/UTC")
+  @spec seconds_since_oct9th_2024_next_interval(integer(), binary() | nil) :: integer()
+  def seconds_since_oct9th_2024_next_interval(long_poll_timeout_ms, prev_interval \\ nil) do
+    case div(long_poll_timeout_ms, 1000) do
+      0 ->
+        0
+
+      long_poll_timeout_sec ->
+        now = DateTime.utc_now()
+
+        diff_in_seconds = DateTime.diff(now, @oct9th2024, :second)
+        next_interval = ceil(diff_in_seconds / long_poll_timeout_sec) * long_poll_timeout_sec
+
+        # randomize the interval if previous one is the same
+        next_interval =
+          if prev_interval && "#{next_interval}" == prev_interval do
+            # Generate a random integer between 0 and 99999
+            random_integer = :rand.uniform(100_000)
+            next_interval + random_integer
+          else
+            next_interval
+          end
+
+        next_interval
+    end
+  end
+
+  alias OpenTelemetry.SemConv, as: SC
+
+  def common_open_telemetry_attrs(%Plug.Conn{assigns: assigns} = conn) do
+    query_params_map =
+      if is_struct(conn.query_params, Plug.Conn.Unfetched) do
+        %{}
+      else
+        Map.new(conn.query_params, fn {k, v} -> {"http.query_param.#{k}", v} end)
+      end
+
+    %{
+      "tenant.id" => assigns[:tenant_id],
+      "error.type" => assigns[:error_str],
+      "http.request_id" => assigns[:plug_request_id],
+      "http.query_string" => conn.query_string,
+      SC.ClientAttributes.client_address() => client_ip(conn),
+      SC.ServerAttributes.server_address() => conn.host,
+      SC.ServerAttributes.server_port() => conn.port,
+      SC.HTTPAttributes.http_request_method() => conn.method,
+      SC.HTTPAttributes.http_response_status_code() => conn.status,
+      SC.Incubating.HTTPAttributes.http_response_size() => assigns[:streaming_bytes_sent],
+      SC.NetworkAttributes.network_transport() => :tcp,
+      SC.NetworkAttributes.network_local_port() => conn.port,
+      SC.UserAgentAttributes.user_agent_original() => user_agent(conn),
+      SC.Incubating.URLAttributes.url_path() => conn.request_path,
+      SC.URLAttributes.url_scheme() => conn.scheme,
+      SC.URLAttributes.url_full() =>
+        %URI{
+          scheme: to_string(conn.scheme),
+          host: conn.host,
+          port: conn.port,
+          path: conn.request_path,
+          query: conn.query_string
+        }
+        |> to_string()
+    }
+    |> Map.filter(fn {_k, v} -> not is_nil(v) end)
+    |> Map.merge(query_params_map)
+    |> Map.merge(Map.new(conn.req_headers, fn {k, v} -> {"http.request.header.#{k}", v} end))
+    |> Map.merge(Map.new(conn.resp_headers, fn {k, v} -> {"http.response.header.#{k}", v} end))
+  end
+
+  defp client_ip(%Plug.Conn{remote_ip: remote_ip} = conn) do
+    case Plug.Conn.get_req_header(conn, "x-forwarded-for") do
+      [] ->
+        remote_ip
+        |> :inet_parse.ntoa()
+        |> to_string()
+
+      [ip_address | _] ->
+        ip_address
+    end
+  end
+
+  defp user_agent(%Plug.Conn{} = conn) do
+    case Plug.Conn.get_req_header(conn, "user-agent") do
+      [] -> ""
+      [head | _] -> head
+    end
+  end
+
   defmodule CORSHeaderPlug do
     @behaviour Plug
     import Plug.Conn

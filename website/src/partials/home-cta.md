@@ -15,7 +15,7 @@ You can start by adopting Electric incrementally,
     <a href="/docs/api/clients/typescript">
       client&nbsp;libraries</a>
     and
-    <a href="/docs/api/integrations/react">
+    <a href="/docs/integrations/react">
       framework&nbsp;hooks</a></span>.
 </span>
 
@@ -24,7 +24,8 @@ import { useShape } from '@electric-sql/react'
 
 const Component = () => {
   const { data } = useShape({
-    url: `${BASE_URL}/v1/shape/items`
+    url: `${BASE_URL}/v1/shape`,
+    table: `items`
   })
 
   return (

@@ -38,13 +38,13 @@ A client can choose to sync one shape, or lots of shapes. Many clients can sync 
 
 Shapes are defined by:
 
-- a `root_table`, such as `projects`
+- a `table`, such as `projects`
 - a `where` clause, used to filter the rows in that table, such as `status='active'`
 
 > [!IMPORTANT] Limitations
 > Shapes are currently single table, whole row only. You can sync all the rows in a table, or a subset of the rows in that table. You can't yet [select columns](#whole-rows) or sync an [include tree](#single-table) without filtering or joining in the client.
 
-### `root_table`
+### `table`
 
 This is the root table of the shape. It must match a table in your Postgres database.
 
@@ -52,7 +52,7 @@ The value can be just a tablename like `projects`, or can be a qualified tablena
 
 ### `where` clause
 
-Optional where clause to filter rows in the `root_table`.
+Optional where clause to filter rows in the `table`.
 
 This must be a valid [PostgreSQL WHERE clause](https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-WHERE) using SQL syntax, e.g.:
 
@@ -83,26 +83,25 @@ You can use logical operators like `AND` and `OR` to group multiple conditions, 
 
 ## Subscribing to shapes
 
-Local clients establish shape subscriptions, typically using [client libraries](/docs/api/clients/typescript). These sync data from the [Electric sync service](/product/sync) into the client using the [HTTP API](/docs/api/http).
+Local clients establish shape subscriptions, typically using [client libraries](/docs/api/clients/typescript). These sync data from the [Electric sync engine](/product/sync) into the client using the [HTTP API](/docs/api/http).
 
-The sync service maintains shape subscriptions and streams any new data and data changes to the local
-client. In the client, shapes can be held as objects in memory, for example using a [`useShape`](/docs/api/integrations/react) hook, or in a normalised store or database like [PGlite](/product/pglite).
+The sync service maintains shape subscriptions and streams any new data and data changes to the local client. In the client, shapes can be held as objects in memory, for example using a [`useShape`](/docs/integrations/react) hook, or in a normalised store or database like [PGlite](/product/pglite).
 
 ### HTTP
 
 You can sync shapes manually using the
-<a href="/openapi.html#/paths/~1v1~1shape~1%7Broot_table%7D/get"
+<a href="/openapi.html#/paths/~1v1~1shape~1%7Btable%7D/get"
     target="_blank">
   <code>GET /v1/shape</code></a> endpoint. First make an initial sync request to get the current data for the Shape, such as:
 
 ```sh
-curl -i 'http://localhost:3000/v1/shape/foo?offset=-1'
+curl -i 'http://localhost:3000/v1/shape?table=foo&offset=-1'
 ```
 
 Then switch into a live mode to use long-polling to receive real-time updates:
 
 ```sh
-curl -i 'http://localhost:3000/v1/shape/foo?live=true&offset=...&shape_id=...'
+curl -i 'http://localhost:3000/v1/shape?table=foo&live=true&offset=...&handle=...'
 ```
 
 These requests both return an array of [Shape Log](/docs/api/http#shape-log) entries. You can process these manually, or use a higher-level client.
@@ -123,7 +122,8 @@ Instantiate a `ShapeStream` and materialise into a `Shape`:
 import { ShapeStream, Shape } from '@electric-sql/client'
 
 const stream = new ShapeStream({
-  url: `http://localhost:3000/v1/shape/foo`,
+  url: `http://localhost:3000/v1/shape`,
+  table: `foo`,
 })
 const shape = new Shape(stream)
 
@@ -139,7 +139,7 @@ shape.subscribe(({ rows }) => {
 })
 ```
 
-Or you can use framework integrations like the [`useShape`](/docs/api/integrations/react) hook to automatically bind materialised shapes to your components.
+Or you can use framework integrations like the [`useShape`](/docs/integrations/react) hook to automatically bind materialised shapes to your components.
 
 See the [Quickstart](/docs/quickstart) and [HTTP API](/docs/api/http) docs for more information.
 

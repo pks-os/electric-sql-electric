@@ -4,8 +4,7 @@ defmodule Electric.Plug.ServeShapePlug do
 
   # The halt/1 function is redefined further down below
   import Plug.Conn, except: [halt: 1]
-
-  alias OpenTelemetry.SemConv, as: SC
+  import Electric.Plug.TenantUtils
 
   alias Electric.Shapes
   alias Electric.Schema
@@ -64,13 +63,14 @@ defmodule Electric.Plug.ServeShapePlug do
 
     @primary_key false
     embedded_schema do
-      field(:root_table, :string)
+      field(:table, :string)
       field(:offset, :string)
-      field(:shape_id, :string)
+      field(:handle, :string)
       field(:live, :boolean, default: false)
       field(:where, :string)
       field(:columns, :string)
       field(:shape_definition, :string)
+      field(:replica, Ecto.Enum, values: [:default, :full], default: :default)
     end
 
     def validate(params, opts) do
@@ -78,10 +78,10 @@ defmodule Electric.Plug.ServeShapePlug do
       |> cast(params, __schema__(:fields) -- [:shape_definition],
         message: fn _, _ -> "must be %{type}" end
       )
-      |> validate_required([:root_table, :offset])
+      |> validate_required([:table, :offset])
       |> cast_offset()
       |> cast_columns()
-      |> validate_shape_id_with_offset()
+      |> validate_handle_with_offset()
       |> validate_live_with_offset()
       |> cast_root_table(opts)
       |> apply_action(:validate)
@@ -128,15 +128,16 @@ defmodule Electric.Plug.ServeShapePlug do
       end
     end
 
-    def validate_shape_id_with_offset(%Ecto.Changeset{valid?: false} = changeset), do: changeset
+    def validate_handle_with_offset(%Ecto.Changeset{valid?: false} = changeset),
+      do: changeset
 
-    def validate_shape_id_with_offset(%Ecto.Changeset{} = changeset) do
+    def validate_handle_with_offset(%Ecto.Changeset{} = changeset) do
       offset = fetch_change!(changeset, :offset)
 
       if offset == LogOffset.before_all() do
         changeset
       else
-        validate_required(changeset, [:shape_id], message: "can't be blank when offset != -1")
+        validate_required(changeset, [:handle], message: "can't be blank when offset != -1")
       end
     end
 
@@ -153,11 +154,15 @@ defmodule Electric.Plug.ServeShapePlug do
     end
 
     def cast_root_table(%Ecto.Changeset{} = changeset, opts) do
-      table = fetch_change!(changeset, :root_table)
+      table = fetch_change!(changeset, :table)
       where = fetch_field!(changeset, :where)
       columns = get_change(changeset, :columns, nil)
+      replica = fetch_field!(changeset, :replica)
 
-      case Shapes.Shape.new(table, opts ++ [where: where, columns: columns]) do
+      case Shapes.Shape.new(
+             table,
+             opts ++ [where: where, columns: columns, replica: replica]
+           ) do
         {:ok, result} ->
           put_change(changeset, :shape_definition, result)
 
@@ -178,6 +183,7 @@ defmodule Electric.Plug.ServeShapePlug do
   # start_telemetry_span needs to always be the first plug after fetching query params.
   plug :start_telemetry_span
   plug :put_resp_content_type, "application/json"
+  plug :load_tenant
   plug :validate_query_params
   plug :load_shape_info
   plug :put_schema_header
@@ -214,80 +220,81 @@ defmodule Electric.Plug.ServeShapePlug do
 
   defp load_shape_info(%Conn{} = conn, _) do
     OpenTelemetry.with_span("shape_get.plug.load_shape_info", [], fn ->
-      shape_info = get_or_create_shape_id(conn.assigns)
+      shape_info = get_or_create_shape_handle(conn.assigns)
       handle_shape_info(conn, shape_info)
     end)
   end
 
-  # No shape_id is provided so we can get the existing one for this shape
+  # No handle is provided so we can get the existing one for this shape
   # or create a new shape if it does not yet exist
-  defp get_or_create_shape_id(%{shape_definition: shape, config: config, shape_id: nil}) do
-    Shapes.get_or_create_shape_id(config, shape)
+  defp get_or_create_shape_handle(%{shape_definition: shape, config: config, handle: nil}) do
+    Shapes.get_or_create_shape_handle(config, shape)
   end
 
-  # A shape ID is provided so we need to return the shape that matches the shape ID and the shape definition
-  defp get_or_create_shape_id(%{shape_definition: shape, config: config}) do
+  # A shape handle is provided so we need to return the shape that matches the shape handle and the shape definition
+  defp get_or_create_shape_handle(%{shape_definition: shape, config: config}) do
     Shapes.get_shape(config, shape)
   end
 
   defp handle_shape_info(
-         %Conn{assigns: %{shape_definition: shape, config: config, shape_id: shape_id}} = conn,
+         %Conn{assigns: %{shape_definition: shape, config: config, handle: shape_handle}} =
+           conn,
          nil
        ) do
     # There is no shape that matches the shape definition (because shape info is `nil`)
-    if shape_id != nil && Shapes.has_shape?(config, shape_id) do
-      # but there is a shape that matches the shape ID
-      # thus the shape ID does not match the shape definition
+    if shape_handle != nil && Shapes.has_shape?(config, shape_handle) do
+      # but there is a shape that matches the shape handle
+      # thus the shape handle does not match the shape definition
       # and we return a 400 bad request status code
       conn
       |> send_resp(400, @shape_definition_mismatch)
       |> halt()
     else
-      # The shape ID does not exist or no longer exists
+      # The shape handle does not exist or no longer exists
       # e.g. it may have been deleted.
       # Hence, create a new shape for this shape definition
       # and return a 409 with a redirect to the newly created shape.
       # (will be done by the recursive `handle_shape_info` call)
-      shape_info = Shapes.get_or_create_shape_id(config, shape)
+      shape_info = Shapes.get_or_create_shape_handle(config, shape)
       handle_shape_info(conn, shape_info)
     end
   end
 
   defp handle_shape_info(
-         %Conn{assigns: %{shape_id: shape_id}} = conn,
-         {active_shape_id, last_offset}
+         %Conn{assigns: %{handle: shape_handle}} = conn,
+         {active_shape_handle, last_offset}
        )
-       when is_nil(shape_id) or shape_id == active_shape_id do
+       when is_nil(shape_handle) or shape_handle == active_shape_handle do
     # We found a shape that matches the shape definition
-    # and the shape has the same ID as the shape ID provided by the user
+    # and the shape has the same ID as the shape handle provided by the user
     conn
-    |> assign(:active_shape_id, active_shape_id)
+    |> assign(:active_shape_handle, active_shape_handle)
     |> assign(:last_offset, last_offset)
-    |> put_resp_header("electric-shape-id", active_shape_id)
+    |> put_resp_header("electric-handle", active_shape_handle)
   end
 
   defp handle_shape_info(
-         %Conn{assigns: %{shape_id: shape_id, config: config}} = conn,
-         {active_shape_id, _}
+         %Conn{assigns: %{config: config, handle: shape_handle, table: table}} = conn,
+         {active_shape_handle, _}
        ) do
-    if Shapes.has_shape?(config, shape_id) do
+    if Shapes.has_shape?(config, shape_handle) do
       # The shape with the provided ID exists but does not match the shape definition
       # otherwise we would have found it and it would have matched the previous function clause
       conn
       |> send_resp(400, @shape_definition_mismatch)
       |> halt()
     else
-      # The requested shape_id is not found, returns 409 along with a location redirect for clients to
+      # The requested shape_handle is not found, returns 409 along with a location redirect for clients to
       # re-request the shape from scratch with the new shape id which acts as a consistent cache buster
-      # e.g. GET /v1/shape/{root_table}?shape_id={new_shape_id}&offset=-1
+      # e.g. GET /v1/shape?table={root_table}&handle={new_shape_handle}&offset=-1
 
       # TODO: discuss returning a 307 redirect rather than a 409, the client
       # will have to detect this and throw out old data
       conn
-      |> put_resp_header("electric-shape-id", active_shape_id)
+      |> put_resp_header("electric-handle", active_shape_handle)
       |> put_resp_header(
         "location",
-        "#{conn.request_path}?shape_id=#{active_shape_id}&offset=-1"
+        "#{conn.request_path}?table=#{table}&handle=#{active_shape_handle}&offset=-1"
       )
       |> send_resp(409, @must_refetch)
       |> halt()
@@ -313,14 +320,16 @@ defmodule Electric.Plug.ServeShapePlug do
   # If chunk offsets are available, use those instead of the latest available offset
   # to optimize for cache hits and response sizes
   defp determine_log_chunk_offset(%Conn{assigns: assigns} = conn, _) do
-    %{config: config, active_shape_id: shape_id, offset: offset} = assigns
+    %{config: config, active_shape_handle: shape_handle, offset: offset, tenant_id: tenant_id} =
+      assigns
 
     chunk_end_offset =
-      Shapes.get_chunk_end_log_offset(config, shape_id, offset) || assigns.last_offset
+      Shapes.get_chunk_end_log_offset(config, shape_handle, offset, tenant_id) ||
+        assigns.last_offset
 
     conn
     |> assign(:chunk_end_offset, chunk_end_offset)
-    |> put_resp_header("electric-chunk-last-offset", "#{chunk_end_offset}")
+    |> put_resp_header("electric-offset", "#{chunk_end_offset}")
   end
 
   defp determine_up_to_date(
@@ -341,25 +350,25 @@ defmodule Electric.Plug.ServeShapePlug do
       |> assign(:up_to_date, [])
       # header might have been added on first pass but no longer valid
       # if listening to live changes and an incomplete chunk is formed
-      |> delete_resp_header("electric-chunk-up-to-date")
+      |> delete_resp_header("electric-up-to-date")
     else
       conn
       |> assign(:up_to_date, [@up_to_date])
-      |> put_resp_header("electric-chunk-up-to-date", "")
+      |> put_resp_header("electric-up-to-date", "")
     end
   end
 
   defp generate_etag(%Conn{} = conn, _) do
     %{
       offset: offset,
-      active_shape_id: active_shape_id,
+      active_shape_handle: active_shape_handle,
       chunk_end_offset: chunk_end_offset
     } = conn.assigns
 
     conn
     |> assign(
       :etag,
-      "#{active_shape_id}:#{offset}:#{chunk_end_offset}"
+      "#{active_shape_handle}:#{offset}:#{chunk_end_offset}"
     )
   end
 
@@ -404,7 +413,7 @@ defmodule Electric.Plug.ServeShapePlug do
         "public, max-age=5, stale-while-revalidate=5"
       )
       |> put_resp_header(
-        "electric-next-cursor",
+        "electric-cursor",
         TimeUtils.seconds_since_oct9th_2024_next_interval(conn) |> Integer.to_string()
       )
 
@@ -431,15 +440,16 @@ defmodule Electric.Plug.ServeShapePlug do
          %Conn{
            assigns: %{
              chunk_end_offset: chunk_end_offset,
-             active_shape_id: shape_id,
+             active_shape_handle: shape_handle,
+             tenant_id: tenant_id,
              up_to_date: maybe_up_to_date
            }
          } = conn
        ) do
-    case Shapes.get_snapshot(conn.assigns.config, shape_id) do
+    case Shapes.get_snapshot(conn.assigns.config, shape_handle, tenant_id) do
       {:ok, {offset, snapshot}} ->
         log =
-          Shapes.get_log_stream(conn.assigns.config, shape_id,
+          Shapes.get_log_stream(conn.assigns.config, shape_handle, tenant_id,
             since: offset,
             up_to: chunk_end_offset
           )
@@ -474,13 +484,14 @@ defmodule Electric.Plug.ServeShapePlug do
            assigns: %{
              offset: offset,
              chunk_end_offset: chunk_end_offset,
-             active_shape_id: shape_id,
+             active_shape_handle: shape_handle,
+             tenant_id: tenant_id,
              up_to_date: maybe_up_to_date
            }
          } = conn
        ) do
     log =
-      Shapes.get_log_stream(conn.assigns.config, shape_id,
+      Shapes.get_log_stream(conn.assigns.config, shape_handle, tenant_id,
         since: offset,
         up_to: chunk_end_offset
       )
@@ -488,7 +499,7 @@ defmodule Electric.Plug.ServeShapePlug do
     if Enum.take(log, 1) == [] and conn.assigns.live do
       conn
       |> assign(:ot_is_immediate_response, false)
-      |> hold_until_change(shape_id)
+      |> hold_until_change(shape_handle)
     else
       [log, maybe_up_to_date]
       |> Stream.concat()
@@ -543,12 +554,16 @@ defmodule Electric.Plug.ServeShapePlug do
   defp listen_for_new_changes(%Conn{assigns: assigns} = conn, _) do
     # Only start listening when we know there is a possibility that nothing is going to be returned
     if LogOffset.compare(assigns.offset, assigns.last_offset) != :lt do
-      shape_id = assigns.shape_id
+      shape_handle = assigns.handle
 
       ref = make_ref()
       registry = conn.assigns.config[:registry]
-      Registry.register(registry, shape_id, ref)
-      Logger.debug("Client #{inspect(self())} is registered for changes to #{shape_id}")
+      tenant = conn.assigns.tenant_id
+      Registry.register(registry, {tenant, shape_handle}, ref)
+
+      Logger.debug(
+        "[Tenant #{tenant}]: Client #{inspect(self())} is registered for changes to #{shape_handle}"
+      )
 
       assign(conn, :new_changes_ref, ref)
     else
@@ -556,9 +571,9 @@ defmodule Electric.Plug.ServeShapePlug do
     end
   end
 
-  def hold_until_change(conn, shape_id) do
+  def hold_until_change(conn, shape_handle) do
     long_poll_timeout = conn.assigns.config[:long_poll_timeout]
-    Logger.debug("Client #{inspect(self())} is waiting for changes to #{shape_id}")
+    Logger.debug("Client #{inspect(self())} is waiting for changes to #{shape_handle}")
     ref = conn.assigns.new_changes_ref
 
     receive do
@@ -568,12 +583,12 @@ defmodule Electric.Plug.ServeShapePlug do
         |> assign(:last_offset, latest_log_offset)
         |> assign(:chunk_end_offset, latest_log_offset)
         # update last offset header
-        |> put_resp_header("electric-chunk-last-offset", "#{latest_log_offset}")
+        |> put_resp_header("electric-offset", "#{latest_log_offset}")
         |> determine_up_to_date([])
         |> serve_shape_log()
 
       {^ref, :shape_rotation} ->
-        # We may want to notify the client better that the shape ID had changed, but just closing the response
+        # We may want to notify the client better that the shape handle had changed, but just closing the response
         # and letting the client handle it on reconnection is good enough.
         conn
         |> assign(:ot_is_shape_rotated, true)
@@ -590,27 +605,22 @@ defmodule Electric.Plug.ServeShapePlug do
   end
 
   defp open_telemetry_attrs(%Conn{assigns: assigns} = conn) do
-    shape_id =
+    shape_handle =
       if is_struct(conn.query_params, Plug.Conn.Unfetched) do
-        assigns[:active_shape_id] || assigns[:shape_id]
+        assigns[:active_shape_handle] || assigns[:shape_handle]
       else
-        conn.query_params["shape_id"] || assigns[:active_shape_id] || assigns[:shape_id]
-      end
-
-    query_params_map =
-      if is_struct(conn.query_params, Plug.Conn.Unfetched) do
-        %{}
-      else
-        Map.new(conn.query_params, fn {k, v} -> {"http.query_param.#{k}", v} end)
+        conn.query_params["handle"] || assigns[:active_shape_handle] || assigns[:shape_handle]
       end
 
     maybe_up_to_date = if up_to_date = assigns[:up_to_date], do: up_to_date != []
 
-    %{
-      "shape.id" => shape_id,
+    Electric.Plug.Utils.common_open_telemetry_attrs(conn)
+    |> Map.merge(%{
+      "shape.handle" => shape_handle,
       "shape.where" => assigns[:where],
-      "shape.root_table" => assigns[:root_table],
+      "shape.root_table" => assigns[:table],
       "shape.definition" => assigns[:shape_definition],
+      "shape.replica" => assigns[:replica],
       "shape_req.is_live" => assigns[:live],
       "shape_req.offset" => assigns[:offset],
       "shape_req.is_shape_rotated" => assigns[:ot_is_shape_rotated] || false,
@@ -619,54 +629,8 @@ defmodule Electric.Plug.ServeShapePlug do
       "shape_req.is_immediate_response" => assigns[:ot_is_immediate_response] || true,
       "shape_req.is_cached" => if(conn.status, do: conn.status == 304),
       "shape_req.is_error" => if(conn.status, do: conn.status >= 400),
-      "shape_req.is_up_to_date" => maybe_up_to_date,
-      "error.type" => assigns[:error_str],
-      "http.request_id" => assigns[:plug_request_id],
-      "http.query_string" => conn.query_string,
-      SC.ClientAttributes.client_address() => client_ip(conn),
-      SC.ServerAttributes.server_address() => conn.host,
-      SC.ServerAttributes.server_port() => conn.port,
-      SC.HTTPAttributes.http_request_method() => conn.method,
-      SC.HTTPAttributes.http_response_status_code() => conn.status,
-      SC.Incubating.HTTPAttributes.http_response_size() => assigns[:streaming_bytes_sent],
-      SC.NetworkAttributes.network_transport() => :tcp,
-      SC.NetworkAttributes.network_local_port() => conn.port,
-      SC.UserAgentAttributes.user_agent_original() => user_agent(conn),
-      SC.Incubating.URLAttributes.url_path() => conn.request_path,
-      SC.URLAttributes.url_scheme() => conn.scheme,
-      SC.URLAttributes.url_full() =>
-        %URI{
-          scheme: to_string(conn.scheme),
-          host: conn.host,
-          port: conn.port,
-          path: conn.request_path,
-          query: conn.query_string
-        }
-        |> to_string()
-    }
-    |> Map.filter(fn {_k, v} -> not is_nil(v) end)
-    |> Map.merge(query_params_map)
-    |> Map.merge(Map.new(conn.req_headers, fn {k, v} -> {"http.request.header.#{k}", v} end))
-    |> Map.merge(Map.new(conn.resp_headers, fn {k, v} -> {"http.response.header.#{k}", v} end))
-  end
-
-  defp client_ip(%Conn{remote_ip: remote_ip} = conn) do
-    case get_req_header(conn, "x-forwarded-for") do
-      [] ->
-        remote_ip
-        |> :inet_parse.ntoa()
-        |> to_string()
-
-      [ip_address | _] ->
-        ip_address
-    end
-  end
-
-  defp user_agent(%Conn{} = conn) do
-    case get_req_header(conn, "user-agent") do
-      [] -> ""
-      [head | _] -> head
-    end
+      "shape_req.is_up_to_date" => maybe_up_to_date
+    })
   end
 
   #

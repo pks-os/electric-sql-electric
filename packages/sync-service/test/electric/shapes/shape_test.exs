@@ -214,7 +214,7 @@ defmodule Electric.Shapes.ShapeTest do
     import Support.DbStructureSetup
     import Support.ComponentSetup
 
-    setup [:with_shared_db, :with_inspector, :with_sql_execute]
+    setup [:with_shared_db, :with_tenant_id, :with_inspector, :with_sql_execute]
 
     @tag with_sql: [
            "CREATE SCHEMA IF NOT EXISTS test",
@@ -285,14 +285,14 @@ defmodule Electric.Shapes.ShapeTest do
     end
 
     test "errors on empty table name", %{inspector: inspector} do
-      {:error, {:root_table, ["Invalid zero-length delimited identifier"]}} =
+      {:error, {:table, ["Invalid zero-length delimited identifier"]}} =
         Shape.new("", inspector: inspector)
     end
 
     test "errors when the table doesn't exist", %{inspector: inspector} do
       {:error,
        {
-         :root_table,
+         :table,
          [
            ~S|Table "nonexistent" does not exist. If the table name contains capitals or special characters you must quote it.|
          ]
@@ -347,6 +347,19 @@ defmodule Electric.Shapes.ShapeTest do
       assert {:error, {:columns, ["Must include all primary key columns, missing: id"]}} =
                Shape.new("col_table", inspector: inspector, columns: ["value1"])
     end
+
+    @tag with_sql: [
+           "CREATE TABLE IF NOT EXISTS other_table (value TEXT PRIMARY KEY)"
+         ]
+    test "assigns the correct replica value", %{inspector: inspector} do
+      assert {:ok, %Shape{replica: :default}} =
+               Shape.new("other_table", inspector: inspector, replica: :default)
+
+      assert {:ok, %Shape{replica: :full}} =
+               Shape.new("other_table", inspector: inspector, replica: :full)
+
+      assert {:error, _} = Shape.new("other_table", inspector: inspector, replica: :teapot)
+    end
   end
 
   describe "new!/2" do
@@ -354,7 +367,7 @@ defmodule Electric.Shapes.ShapeTest do
     import Support.DbStructureSetup
     import Support.ComponentSetup
 
-    setup [:with_shared_db, :with_inspector, :with_sql_execute]
+    setup [:with_shared_db, :with_tenant_id, :with_inspector, :with_sql_execute]
 
     @tag with_sql: [
            "CREATE SCHEMA IF NOT EXISTS test",
@@ -393,6 +406,21 @@ defmodule Electric.Shapes.ShapeTest do
     test "should not have same integer value for different shape, same table different OID" do
       assert Shape.hash(%Shape{root_table: {"public", "table"}, root_table_id: 1}) !=
                Shape.hash(%Shape{root_table: {"public", "table"}, root_table_id: 2})
+    end
+
+    test "different values of `send_delta` produce differing ids" do
+      refute Shape.hash(%Shape{
+               root_table: {"public", "table2"},
+               root_table_id: 1001,
+               where: "something = true",
+               replica: :default
+             }) ==
+               Shape.hash(%Shape{
+                 root_table: {"public", "table2"},
+                 root_table_id: 1001,
+                 where: "something = true",
+                 replica: :full
+               })
     end
   end
 
