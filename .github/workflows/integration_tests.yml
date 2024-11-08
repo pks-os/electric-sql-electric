@@ -21,39 +21,56 @@ jobs:
     defaults:
       run:
         working-directory: integration-tests
+    env:
+      MIX_ENV: dev
     steps:
       - uses: actions/checkout@v4
+
       - uses: erlef/setup-beam@v1
         with:
           version-type: strict
           version-file: ".tool-versions"
-      - name: Restore dependencies cache
-        uses: actions/cache@v3
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
         with:
           path: packages/sync-service/deps
-          key: ${{ runner.os }}-mix-${{ hashFiles('packages/sync-service/mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-
-      - name: Restore compiled code
-        uses: actions/cache/restore@v4
+          key: "${{ runner.os }}-sync-service-deps-${{ env.MIX_ENV }}-${{ hashFiles('packages/sync-service/mix.lock') }}"
+          restore-keys: |
+            ${{ runner.os }}-sync-service-deps-${{ env.MIX_ENV }}-${{ hashFiles('packages/sync-service/mix.lock') }}
+            ${{ runner.os }}-sync-service-deps-${{ env.MIX_ENV }}-
+            ${{ runner.os }}-sync-service-deps-
+
+      - name: Cache compiled code
+        uses: actions/cache@v4
         with:
           path: |
             packages/sync-service/_build/*/lib
             !packages/sync-service/_build/*/lib/electric
-          key: ${{ runner.os }}-build-test-${{ hashFiles('packages/sync-service/mix.lock') }}
+          key: "${{ runner.os }}-sync-service-build-${{ env.MIX_ENV }}-[${{ github.ref_name }}]-${{ github.sha }}"
+          restore-keys: |
+            ${{ runner.os }}-sync-service-build-${{ env.MIX_ENV }}-[${{ github.ref_name }}]-${{ github.sha }}
+            ${{ runner.os }}-sync-service-build-${{ env.MIX_ENV }}-[${{ github.ref_name }}]-
+            ${{ runner.os }}-sync-service-build-${{ env.MIX_ENV }}-
+            ${{ runner.os }}-sync-service-build-
+
       - name: Install dependencies
         run: mix deps.get && mix deps.compile
         working-directory: packages/sync-service
-      - name: Save compiled code
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            packages/sync-service/_build/*/lib
-            !packages/sync-service/_build/*/lib/electric
-          key: ${{ runner.os }}-build-test-${{ hashFiles('packages/sync-service/mix.lock') }}
+
       - name: Compile
         run: mix compile --force --all-warnings --warnings-as-errors
         working-directory: packages/sync-service
+
       - name: Setup lux
         run: make
+
       - name: Run integration tests
+        id: tests
         run: ./run.sh
+      - name: Upload lux logs
+        uses: actions/upload-artifact@v3
+        if: ${{ failure() && steps.tests.outcome == 'failure'  }}
+        with:
+          name: lux_logs
+          path: integration-tests/**/lux_logs/run_*
