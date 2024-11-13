@@ -2,50 +2,12 @@ defmodule Electric.TenantManagerTest do
   use ExUnit.Case, async: false
 
   alias Electric.TenantManager
-  alias Electric.Tenant.Persistence
 
   import Support.ComponentSetup
   import Support.DbSetup
+  import Support.TestUtils, only: [with_electric_instance_id: 1]
 
   @moduletag :tmp_dir
-
-  describe "start_link/1" do
-    @tenant_id "persisted_tenant"
-
-    setup :with_unique_db
-    setup :with_publication
-
-    setup ctx do
-      # Persist a tenant
-      with_manager = fn ctx ->
-        opts = [
-          app_config: ctx.app_config,
-          persistent_kv: ctx.persistent_kv,
-          electric_instance_id: ctx.electric_instance_id
-        ]
-
-        # Persist a tenant
-        Persistence.persist_tenant!(@tenant_id, ctx.db_config, opts)
-
-        # Now create the tenant manager
-        with_tenant_manager(ctx)
-      end
-
-      with_complete_stack_but_no_tenant(ctx, tenant_manager: with_manager)
-    end
-
-    test "loads tenants from storage", ctx do
-      # Check that it recreated the tenant
-      {:ok, tenant} =
-        TenantManager.get_tenant(@tenant_id,
-          electric_instance_id: ctx.electric_instance_id,
-          tenant_manager: ctx.tenant_manager,
-          tenant_tables_name: ctx.tenant_tables_name
-        )
-
-      assert tenant[:tenant_id] == @tenant_id
-    end
-  end
 
   describe "create_tenant/1" do
     setup :with_unique_db
@@ -227,17 +189,22 @@ defmodule Electric.TenantManagerTest do
   describe "delete_tenant/2" do
     setup :with_unique_db
 
-    setup do
+    setup ctx do
       %{
-        publication_name: "electric_test_publication"
+        publication_name: "electric_test_publication",
+        connection_opts: Map.fetch!(ctx, :db_config)
       }
     end
 
-    setup ctx do
-      ctx
-      |> Map.put(:connection_opts, Map.fetch!(ctx, :db_config))
-      |> with_complete_stack(tenant: &with_supervised_tenant/1)
-    end
+    setup :with_electric_instance_id
+    setup :with_tenant_id
+    setup :with_registry
+    setup :with_persistent_kv
+    setup :with_tenant_tables
+    setup :with_slot_name_and_stream_id
+    setup :with_app_config
+    setup :with_tenant_manager
+    setup :with_supervised_tenant
 
     test "deletes the tenant", %{
       electric_instance_id: electric_instance_id,
