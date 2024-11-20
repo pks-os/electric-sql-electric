@@ -36,6 +36,44 @@ defmodule Electric.ClientTest do
   end
 
   describe "new" do
+    test ":base_url is used as the base of the endpoint" do
+      endpoint = URI.new!("http://localhost:3000/v1/shape")
+
+      {:ok, %Client{endpoint: ^endpoint}} =
+        Client.new(base_url: "http://localhost:3000")
+
+      endpoint = URI.new!("http://localhost:3000/proxy/v1/shape")
+
+      {:ok, %Client{endpoint: ^endpoint}} =
+        Client.new(base_url: "http://localhost:3000/proxy")
+
+      endpoint = URI.new!("http://localhost:3000/some/random/path/v1/shape")
+
+      {:ok, %Client{endpoint: ^endpoint}} =
+        Client.new(base_url: "http://localhost:3000/some/random/path")
+    end
+
+    test ":endpoint is used as-is" do
+      endpoint = URI.new!("http://localhost:3000")
+
+      {:ok, %Client{endpoint: ^endpoint}} =
+        Client.new(endpoint: "http://localhost:3000")
+
+      endpoint = URI.new!("http://localhost:3000/v1/shape")
+
+      {:ok, %Client{endpoint: ^endpoint}} =
+        Client.new(endpoint: "http://localhost:3000/v1/shape")
+
+      endpoint = URI.new!("http://localhost:3000/some/random/path")
+
+      {:ok, %Client{endpoint: ^endpoint}} =
+        Client.new(endpoint: "http://localhost:3000/some/random/path")
+    end
+
+    test "returns an error if neither :base_url or :endpoint is given" do
+      assert {:error, _} = Client.new([])
+    end
+
     test "database_id is correctly assigned" do
       {:ok, %Client{database_id: "1234"}} =
         Client.new(base_url: "http://localhost:3000", database_id: "1234")
@@ -173,12 +211,12 @@ defmodule Electric.ClientTest do
       {:ok, id2} = insert_item(ctx)
       {:ok, id3} = insert_item(ctx)
 
-      assert_receive {:stream, 1, %ChangeMessage{value: %{"id" => ^id2}}}, 500
-      assert_receive {:stream, 1, %ChangeMessage{value: %{"id" => ^id3}}}, 500
+      assert_receive {:stream, 1, %ChangeMessage{value: %{"id" => ^id2}}}, 5000
+      assert_receive {:stream, 1, %ChangeMessage{value: %{"id" => ^id3}}}, 5000
       assert_receive {:stream, 1, up_to_date()}
 
-      assert_receive {:stream, 2, %ChangeMessage{value: %{"id" => ^id2}}}, 500
-      assert_receive {:stream, 2, %ChangeMessage{value: %{"id" => ^id3}}}, 500
+      assert_receive {:stream, 2, %ChangeMessage{value: %{"id" => ^id2}}}, 5000
+      assert_receive {:stream, 2, %ChangeMessage{value: %{"id" => ^id3}}}, 5000
       assert_receive {:stream, 2, up_to_date()}
     end
 

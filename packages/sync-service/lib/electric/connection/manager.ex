@@ -16,7 +16,7 @@ defmodule Electric.Connection.Manager do
       children = [
         ...,
         {Electric.Connection.Manager,
-         electric_instance_id: ...,
+         stack_id: ...,
          connection_opts: [...],
          replication_opts: [...],
          pool_opts: [...],
@@ -37,7 +37,7 @@ defmodule Electric.Connection.Manager do
       :pool_opts,
       # Options specific to `Electric.Timeline`
       :timeline_opts,
-      # Options passed to the Shapes.Supervisor's start_link() function
+      # Options passed to the Replication.Supervisor's start_link() function
       :shape_cache_opts,
       # PID of the replication client
       :replication_client_pid,
@@ -53,14 +53,15 @@ defmodule Electric.Connection.Manager do
       :pg_lock_acquired,
       # PostgreSQL server version
       :pg_version,
-      # Electric instance ID is used for connection process labeling
-      :electric_instance_id,
       # PostgreSQL system identifier
       :pg_system_identifier,
       # PostgreSQL timeline ID
       :pg_timeline_id,
-      :tenant_id,
-      drop_slot_requesters: []
+      # ID used for process labeling and sibling discovery
+      :stack_id,
+      :tweaks,
+      awaiting_active: [],
+      drop_slot_requested: false
     ]
   end
 
@@ -71,7 +72,7 @@ defmodule Electric.Connection.Manager do
   @type status :: :waiting | :starting | :active
 
   @type option ::
-          {:electric_instance_id, atom | String.t()}
+          {:stack_id, atom | String.t()}
           | {:connection_opts, Keyword.t()}
           | {:replication_opts, Keyword.t()}
           | {:pool_opts, Keyword.t()}
@@ -82,19 +83,25 @@ defmodule Electric.Connection.Manager do
 
   @lock_status_logging_interval 10_000
 
+  def child_spec(init_arg) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [init_arg]},
+      type: :supervisor
+    }
+  end
+
   @spec start_link(options) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: name(opts))
   end
 
-  def name(electric_instance_id, tenant_id) do
-    Electric.Application.process_name(electric_instance_id, tenant_id, __MODULE__)
+  def name(stack_id) when not is_map(stack_id) and not is_list(stack_id) do
+    Electric.ProcessRegistry.name(stack_id, __MODULE__)
   end
 
   def name(opts) do
-    electric_instance_id = Keyword.fetch!(opts, :electric_instance_id)
-    tenant_id = Keyword.fetch!(opts, :tenant_id)
-    name(electric_instance_id, tenant_id)
+    name(Keyword.fetch!(opts, :stack_id))
   end
 
   @doc """
@@ -113,8 +120,19 @@ defmodule Electric.Connection.Manager do
     GenServer.call(server, :get_status)
   end
 
-  def drop_replication_slot(server) do
-    GenServer.call(server, :drop_replication_slot)
+  @doc """
+  Only returns once the status is `:active`.
+  If the status is alredy active it returns immediately.
+  This is useful if you need to the connection pool to be running before proceeding.
+  """
+  @spec await_active(GenServer.server()) :: :ok
+  def await_active(server) do
+    GenServer.call(server, :await_active)
+  end
+
+  def drop_replication_slot_on_stop(server) do
+    await_active(server)
+    GenServer.call(server, :drop_replication_slot_on_stop)
   end
 
   def exclusive_connection_lock_acquired(server) do
@@ -157,8 +175,8 @@ defmodule Electric.Connection.Manager do
         shape_cache_opts: shape_cache_opts,
         pg_lock_acquired: false,
         backoff: {:backoff.init(1000, 10_000), nil},
-        electric_instance_id: Keyword.fetch!(opts, :electric_instance_id),
-        tenant_id: Keyword.fetch!(opts, :tenant_id)
+        stack_id: Keyword.fetch!(opts, :stack_id),
+        tweaks: Keyword.fetch!(opts, :tweaks)
       }
 
     # Try to acquire the connection lock on the replication slot
@@ -191,21 +209,16 @@ defmodule Electric.Connection.Manager do
     {:reply, status, state}
   end
 
-  def handle_call(:drop_replication_slot, _from, %{pool_pid: pool} = state) when pool != nil do
-    {:reply, drop_publication(state), state}
+  def handle_call(:await_active, from, %{pool_pid: nil} = state) do
+    {:noreply, %{state | awaiting_active: [from | state.awaiting_active]}}
   end
 
-  def handle_call(:drop_replication_slot, from, state) do
-    {:noreply, %{state | drop_slot_requesters: [from | state.drop_slot_requesters]}}
+  def handle_call(:await_active, _from, state) do
+    {:reply, :ok, state}
   end
 
-  defp drop_publication(state) do
-    publication_name = Keyword.fetch!(state.replication_opts, :publication_name)
-
-    case Postgrex.query(state.pool_pid, "DROP PUBLICATION #{publication_name}", []) do
-      {:ok, _} -> :ok
-      error -> error
-    end
+  def handle_call(:drop_replication_slot_on_stop, _from, state) do
+    {:reply, :ok, %{state | drop_slot_requested: true}}
   end
 
   @impl true
@@ -227,8 +240,10 @@ defmodule Electric.Connection.Manager do
   def handle_continue(:start_replication_client, %State{replication_client_pid: nil} = state) do
     opts =
       state
-      |> Map.take([:electric_instance_id, :tenant_id, :replication_opts, :connection_opts])
+      |> Map.take([:stack_id, :replication_opts, :connection_opts])
       |> Map.to_list()
+
+    Logger.debug("Starting replication client for stack #{state.stack_id}")
 
     case start_replication_client(opts) do
       {:ok, pid, connection_opts} ->
@@ -271,9 +286,9 @@ defmodule Electric.Connection.Manager do
 
         {:ok, shapes_sup_pid} =
           Electric.Connection.Supervisor.start_shapes_supervisor(
-            electric_instance_id: state.electric_instance_id,
-            tenant_id: state.tenant_id,
-            shape_cache_opts: shape_cache_opts
+            stack_id: state.stack_id,
+            shape_cache_opts: shape_cache_opts,
+            tweaks: state.tweaks
           )
 
         # Everything is ready to start accepting and processing logical messages from Postgres.
@@ -286,21 +301,15 @@ defmodule Electric.Connection.Manager do
 
         state = %{state | pool_pid: pool_pid, shape_log_collector_pid: log_collector_pid}
 
-        {:noreply, state, {:continue, :maybe_drop_replication_slot}}
+        for awaiting <- state.awaiting_active do
+          GenServer.reply(awaiting, :ok)
+        end
+
+        {:noreply, %{state | awaiting_active: []}}
 
       {:error, reason} ->
         handle_connection_error(reason, state, "regular")
     end
-  end
-
-  def handle_continue(:maybe_drop_replication_slot, %{drop_slot_requesters: []} = state) do
-    {:noreply, state}
-  end
-
-  def handle_continue(:maybe_drop_replication_slot, %{drop_slot_requesters: requesters} = state) do
-    result = drop_publication(state)
-    Enum.each(requesters, fn requester -> GenServer.reply(requester, result) end)
-    {:noreply, %{state | drop_slot_requesters: []}}
   end
 
   @impl true
@@ -309,11 +318,20 @@ defmodule Electric.Connection.Manager do
     handle_continue(step, state)
   end
 
+  # Special-case the explicit shutdown of the supervision tree
+  def handle_info({:EXIT, _, :shutdown}, state), do: {:noreply, state}
+  def handle_info({:EXIT, _, {:shutdown, _}}, state), do: {:noreply, state}
+
   # When the replication client exits on its own, it can be restarted independently of the lock
   # connection and the DB pool. If any of the latter two shut down, Connection.Manager will
   # itself terminate to be restarted by its supervisor in a clean state.
   def handle_info({:EXIT, pid, reason}, %State{replication_client_pid: pid} = state) do
     halt_if_fatal_error!(reason)
+
+    Logger.debug(
+      "Handling the exit of the replication client #{inspect(pid)} with reason #{inspect(reason)}"
+    )
+
     {:noreply, %{state | replication_client_pid: nil}, {:continue, :start_replication_client}}
   end
 
@@ -329,7 +347,7 @@ defmodule Electric.Connection.Manager do
     {:stop, {:shutdown, reason}, state}
   end
 
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, %{shape_log_collector_pid: pid} = state) do
+  def handle_info({:DOWN, _ref, :process, pid, reason}, %{shape_log_collector_pid: pid} = state) do
     # The replication client would normally exit together with the shape log collector when it
     # is blocked on a call to either `ShapeLogCollector.handle_relation_msg/2` or
     # `ShapeLogCollector.store_transaction/2` and the log collector encounters a storage error.
@@ -343,11 +361,15 @@ defmodule Electric.Connection.Manager do
     # due to a timeout in `:gen_statem.call()`). Hence the wrapping of the function call in a
     # try-catch block.
     try do
-      _ = Electric.Postgres.ReplicationClient.stop(state.replication_client_pid)
+      _ = Electric.Postgres.ReplicationClient.stop(state.replication_client_pid, reason)
     catch
       :exit, _reason ->
         # The replication client has already exited, so nothing else to do here.
         state
+    end
+
+    if state.drop_slot_requested do
+      drop_slot(state)
     end
 
     {:noreply, %{state | shape_log_collector_pid: nil}}
@@ -419,8 +441,9 @@ defmodule Electric.Connection.Manager do
     #
     # See https://github.com/electric-sql/electric/issues/1554
     Postgrex.start_link(
-      [backoff_type: :exp, max_restarts: 3, max_seconds: 5] ++
-        pool_opts ++ Electric.Utils.deobfuscate_password(connection_opts)
+      pool_opts ++
+        [backoff_type: :exp, max_restarts: 3, max_seconds: 5] ++
+        Electric.Utils.deobfuscate_password(connection_opts)
     )
   end
 
@@ -576,5 +599,27 @@ defmodule Electric.Connection.Manager do
       |> List.keyfind(Electric.Replication.ShapeLogCollector, 0)
 
     log_collector_pid
+  end
+
+  defp drop_slot(%{pool_pid: pool} = state) do
+    publication_name = Keyword.fetch!(state.replication_opts, :publication_name)
+    slot_name = Keyword.fetch!(state.replication_opts, :slot_name)
+    slot_temporary? = Keyword.fetch!(state.replication_opts, :slot_temporary?)
+
+    if !slot_temporary? do
+      execute_and_log_errors(pool, "SELECT pg_drop_replication_slot('#{slot_name}');")
+    end
+
+    execute_and_log_errors(pool, "DROP PUBLICATION #{publication_name}")
+  end
+
+  defp execute_and_log_errors(pool, query) do
+    case Postgrex.query(pool, query, []) do
+      {:ok, _} ->
+        :ok
+
+      {:error, error} ->
+        Logger.error("Failed to execute query: #{query}\nError: #{inspect(error)}")
+    end
   end
 end
