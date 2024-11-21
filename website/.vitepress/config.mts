@@ -53,8 +53,14 @@ export default defineConfig({
       'typescript'
     ]
   },
-  rewrites: {
-    'blog/posts/:year-:month-:day-:slug.md': 'blog/:year/:month/:day/:slug.md'
+  rewrites(id) {
+    if (id.startsWith('blog/posts')) {
+      // 'blog/posts/:year-:month-:day-:slug.md': 'blog/:year/:month/:day/:slug.md'
+      return id.replace(
+        /^blog\/posts\/(2[0-9][0-9][0-9])-([0-9][0-9])-([0-9][0-9])-(.*)/,
+        'blog/$1/$2/$3/$4'
+      )
+    }
   },
   sitemap: {
     hostname: 'https://electric-sql.com'
@@ -251,8 +257,10 @@ export default defineConfig({
     },
     siteTitle: false,
     socialLinks: [
-      { icon: 'discord', link: 'https://discord.electric-sql.com' },
-      { icon: 'github', link: 'https://github.com/electric-sql/electric' }
+      { icon: 'pglite', link: 'https://pglite.dev' },
+      { icon: 'github', link: 'https://github.com/electric-sql/electric' },
+      { icon: 'bluesky', link: 'https://bsky.app/profile/electric-sql.com' },
+      { icon: 'discord', link: 'https://discord.electric-sql.com' }
     ]
   },
   transformHead: ({ pageData, siteData }) => {
