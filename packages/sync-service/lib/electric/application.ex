@@ -15,7 +15,7 @@ defmodule Electric.Application do
     # We have "instance id" identifier as the node ID, however that's generated every runtime,
     # so isn't stable across restarts. Our storages however scope themselves based on this stack ID
     # so we're just hardcoding it here.
-    stack_id = "single_stack"
+    stack_id = Application.get_env(:electric, :provided_database_id, "single_stack")
 
     router_opts =
       [
@@ -26,6 +26,7 @@ defmodule Electric.Application do
       ] ++
         Electric.StackSupervisor.build_shared_opts(
           stack_id: stack_id,
+          stack_events_registry: Registry.StackEvents,
           storage: Application.fetch_env!(:electric, :storage)
         )
 
@@ -49,12 +50,10 @@ defmodule Electric.Application do
       Enum.concat([
         [
           Electric.Telemetry,
-          # {Registry,
-          #  name: @process_registry_name, keys: :unique, partitions: System.schedulers_online()},
-          # {Registry,
-          #  name: Registry.ShapeChanges, keys: :duplicate, partitions: System.schedulers_online()},
+          {Registry, name: Registry.StackEvents, keys: :duplicate},
           {Electric.StackSupervisor,
            stack_id: stack_id,
+           stack_events_registry: Registry.StackEvents,
            connection_opts: Application.fetch_env!(:electric, :connection_opts),
            persistent_kv: persistent_kv,
            replication_opts: [

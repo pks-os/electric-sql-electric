@@ -111,8 +111,7 @@ defmodule Support.ComponentSetup do
     {:ok, _} =
       ShapeLogCollector.start_link(
         stack_id: ctx.stack_id,
-        inspector: ctx.inspector,
-        link_consumers: Map.get(ctx, :link_log_collector, true)
+        inspector: ctx.inspector
       )
 
     %{shape_log_collector: ShapeLogCollector.name(ctx.stack_id)}
@@ -168,10 +167,16 @@ defmodule Support.ComponentSetup do
 
     storage = {FileStorage, stack_id: stack_id, storage_dir: ctx.tmp_dir}
 
+    stack_events_registry = Registry.StackEvents
+
+    ref = make_ref()
+    Electric.StackSupervisor.subscribe_to_stack_events(stack_events_registry, stack_id, ref)
+
     stack_supervisor =
       start_supervised!(
         {Electric.StackSupervisor,
          stack_id: stack_id,
+         stack_events_registry: stack_events_registry,
          persistent_kv: kv,
          storage: storage,
          connection_opts: ctx.db_config,
@@ -186,15 +191,21 @@ defmodule Support.ComponentSetup do
            max_restarts: 0,
            pool_size: 2
          ],
-         tweaks: [notify_pid: self(), registry_partitions: 1]},
+         tweaks: [registry_partitions: 1]},
         restart: :temporary
       )
 
-    assert_receive {:startup_progress, ^stack_id, :shape_supervisor_ready}
+    assert_receive {:stack_status, ^ref, :ready}
 
     # Process.sleep(100)
 
-    %{stack_id: stack_id, persistent_kv: kv, stack_supervisor: stack_supervisor, storage: storage}
+    %{
+      stack_id: stack_id,
+      stack_events_registry: stack_events_registry,
+      persistent_kv: kv,
+      stack_supervisor: stack_supervisor,
+      storage: storage
+    }
   end
 
   def build_router_opts(ctx, overrides \\ []) do
@@ -205,7 +216,11 @@ defmodule Support.ComponentSetup do
       allow_shape_deletion: true
     ]
     |> Keyword.merge(
-      Electric.StackSupervisor.build_shared_opts(stack_id: ctx.stack_id, storage: ctx.storage)
+      Electric.StackSupervisor.build_shared_opts(
+        stack_id: ctx.stack_id,
+        stack_events_registry: ctx.stack_events_registry,
+        storage: ctx.storage
+      )
     )
     |> Keyword.merge(overrides)
   end

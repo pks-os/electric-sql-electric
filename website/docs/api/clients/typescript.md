@@ -104,6 +104,18 @@ export interface ShapeStreamOptions<T = never> {
   columns?: string[]
 
   /**
+   * If `replica` is `default` (the default) then Electric will only send the
+   * changed columns in an update.
+   *
+   * If it's `full` Electric will send the entire row with both changed and
+   * unchanged values.
+   *
+   * Setting `replica` to `full` will obviously result in higher bandwidth
+   * usage and so is not recommended.
+   */
+  replica?: Replica
+
+  /**
    * The "offset" on the shape log. This is typically not set as the ShapeStream
    * will handle this automatically. A common scenario where you might pass an offset
    * is if you're maintaining a local cache of the log. If you've gone offline
@@ -150,12 +162,30 @@ export interface ShapeStreamOptions<T = never> {
   fetchClient?: typeof fetch
 
   /**
-   * Custom parser for handling specific data types.
+   * Custom parser for handling specific Postgres data types.
    */
   parser?: Parser<T>
 
+  /**
+   * A function for handling errors.
+   * This is optional, when it is not provided any shapestream errors will be thrown.
+   * If the function is provided and returns an object containing parameters and/or headers
+   * the shapestream will apply those changes and try syncing again.
+   * If the function returns void the shapestream is stopped.
+   */
+  onError?: ShapeStreamErrorHandler
+
   backoffOptions?: BackoffOptions
 }
+
+type RetryOpts = {
+  params?: ParamsRecord
+  headers?: Record<string, string>
+}
+
+type ShapeStreamErrorHandler = (
+  error: Error
+) => void | RetryOpts | Promise<void | RetryOpts>
 ```
 
 Note that certain parameter names are reserved for Electric's internal use and cannot be used in custom params:
@@ -171,23 +201,28 @@ Note that certain parameter names are reserved for Electric's internal use and c
 
 Attempting to use these reserved names will throw an error.
 
-Example usage with custom headers and parameters:
+### ShapeStream Configuration
 
-```ts
+The ShapeStream constructor accepts several configuration options:
+
+```typescript
 const stream = new ShapeStream({
+  // Required: URL to fetch shapes from
   url: 'http://localhost:3000/v1/shape',
   table: 'items',
-  // Add authentication header
+  // E.g. add authentication header
   headers: {
     'Authorization': 'Bearer token'
   },
-  // Add custom URL parameters
+  // E.g. add custom URL parameters
   params: {
     'tenant': 'acme-corp',
     'version': '1.0'
   }
 })
 ```
+
+Note: When using custom parameters, be careful not to use reserved parameter names as they may conflict with Electric's internal parameters.
 
 #### Messages
 
@@ -252,6 +287,35 @@ const stream = new ShapeStream({
 
 This is less efficient and will use more bandwidth for the same shape (especially for tables with large static column values). Note also that shapes with different `replica` settings are distinct, even for the same table and where clause combination.
 
+#### Custom error handler
+
+You can provide a custom error handler to recover from 4xx HTTP errors. 
+Using a custom error handler we can for instance refresh the authorization token when a request is rejected with a `401 Unauthorized` status code because the token expired:
+
+```ts
+const stream = new ShapeStream({
+  url: 'http://localhost:3000/v1/shape',
+  table: 'items',
+  // Add authentication header
+  headers: {
+    'Authorization': 'Bearer token'
+  },
+  // Add custom URL parameters
+  onError: async (error) => {
+    if (error instanceof FetchError && error.status === 401) {
+      const token = await getToken()
+      return {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    }
+    // Rethrow errors we can't handle
+    throw error
+  }
+})
+```
+
 ### Shape
 
 The [`Shape`](https://github.com/electric-sql/electric/blob/main/packages/typescript-client/src/shape.ts) is the main primitive for working with synced data.
@@ -275,5 +339,99 @@ shape.subscribe(({ rows }) => {
   // rows is an array of the latest value of each row in a shape.
 })
 ```
+
+### Subscribing to updates
+
+The `subscribe` method allows you to receive updates whenever the shape changes. It takes two arguments:
+1. A message handler callback (required)
+2. An error handler callback (optional)
+
+```typescript
+const stream = new ShapeStream({
+  url: 'http://localhost:3000/v1/shape',
+  table: 'issues'
+})
+
+// Subscribe to both message and error handlers
+stream.subscribe(
+  (messages) => {
+    // Process messages
+    console.log('Received messages:', messages)
+  },
+  (error) => {
+    // Get notified about errors
+    console.error('Error in subscription:', error)
+  }
+)
+```
+
+You can have multiple active subscriptions to the same stream. Each subscription will receive the same messages, and the stream will wait for all subscribers to process their messages before proceeding.
+
+To stop receiving updates, you can either:
+- Unsubscribe a specific subscription using the function returned by `subscribe`
+- Unsubscribe all subscriptions using `unsubscribeAll()`
+
+```typescript
+// Store the unsubscribe function
+const unsubscribe = stream.subscribe(messages => {
+  console.log('Received messages:', messages)
+})
+
+// Later, unsubscribe this specific subscription
+unsubscribe()
+
+// Or unsubscribe all subscriptions
+stream.unsubscribeAll()
+```
+
+### Error Handling
+
+The ShapeStream provides two ways to handle errors:
+
+1. Using the `onError` handler (recommended):
+```typescript
+const stream = new ShapeStream({
+  url: 'http://localhost:3000/v1/shape',
+  table: 'issues',
+  onError: (error) => {
+    // Handle all stream errors here
+    if (error instanceof FetchError) {
+      console.error('HTTP error:', error.status, error.message)
+    } else {
+      console.error('Stream error:', error)
+    }
+  }
+})
+```
+
+If no `onError` handler is provided, the ShapeStream will throw errors that occur during streaming.
+
+2. Individual subscribers can optionally handle errors specific to their subscription:
+```typescript
+stream.subscribe(
+  (messages) => {
+    // Process messages
+  },
+  (error) => {
+    // Handle errors for this specific subscription
+    console.error('Subscription error:', error)
+  }
+)
+```
+
+#### Error Types
+
+The following error types may be encountered:
+
+**Initialization Errors** (thrown by constructor):
+- `MissingShapeUrlError`: Missing required URL parameter
+- `InvalidSignalError`: Invalid AbortSignal instance
+- `ReservedParamError`: Using reserved parameter names
+
+**Runtime Errors** (handled by `onError` or thrown):
+- `FetchError`: HTTP errors during shape fetching
+- `FetchBackoffAbortError`: Fetch aborted using AbortSignal
+- `MissingShapeHandleError`: Missing required shape handle
+- `ParserNullValueError`: Parser encountered NULL value in a column that doesn't allow NULL values
 
 See the [Examples](https://github.com/electric-sql/electric/tree/main/examples) and [integrations](/docs/integrations/react) for more usage examples.
