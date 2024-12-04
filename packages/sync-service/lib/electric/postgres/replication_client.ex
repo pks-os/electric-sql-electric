@@ -4,6 +4,7 @@ defmodule Electric.Postgres.ReplicationClient do
   """
   use Postgrex.ReplicationConnection
 
+  alias Electric.Replication.Changes.Transaction
   alias Electric.Postgres.LogicalReplication.Decoder
   alias Electric.Postgres.Lsn
   alias Electric.Postgres.ReplicationClient.Collector
@@ -26,6 +27,7 @@ defmodule Electric.Postgres.ReplicationClient do
   defmodule State do
     @enforce_keys [:transaction_received, :relation_received, :publication_name]
     defstruct [
+      :stack_id,
       :connection_manager,
       :transaction_received,
       :relation_received,
@@ -50,6 +52,7 @@ defmodule Electric.Postgres.ReplicationClient do
     ]
 
     @type t() :: %__MODULE__{
+            stack_id: String.t(),
             connection_manager: pid(),
             transaction_received: {module(), atom(), [term()]},
             relation_received: {module(), atom(), [term()]},
@@ -66,6 +69,7 @@ defmodule Electric.Postgres.ReplicationClient do
           }
 
     @opts_schema NimbleOptions.new!(
+                   stack_id: [required: true, type: :string],
                    connection_manager: [required: true, type: :pid],
                    transaction_received: [required: true, type: :mfa],
                    relation_received: [required: true, type: :mfa],
@@ -105,7 +109,11 @@ defmodule Electric.Postgres.ReplicationClient do
         auto_reconnect: false
       ] ++ Electric.Utils.deobfuscate_password(config.connection_opts)
 
-    Postgrex.ReplicationConnection.start_link(__MODULE__, config.replication_opts, start_opts)
+    Postgrex.ReplicationConnection.start_link(
+      __MODULE__,
+      config.replication_opts ++ [stack_id: config.stack_id],
+      start_opts
+    )
   end
 
   def name(stack_id) do
@@ -213,8 +221,7 @@ defmodule Electric.Postgres.ReplicationClient do
   end
 
   defp process_x_log_data(data, wal_end, %State{} = state) do
-    data
-    |> decode_message()
+    OpenTelemetry.timed_fun("decode_message_duration", fn -> decode_message(data) end)
     # # Useful for debugging:
     # |> tap(fn %struct{} = msg ->
     #   message_type = struct |> to_string() |> String.split(".") |> List.last()
@@ -241,10 +248,21 @@ defmodule Electric.Postgres.ReplicationClient do
 
         {:noreply, %{state | txn_collector: txn_collector}}
 
-      {txn, %Collector{} = txn_collector} ->
+      {%Transaction{} = txn, %Collector{} = txn_collector} ->
         state = %{state | txn_collector: txn_collector}
 
         {m, f, args} = state.transaction_received
+
+        :telemetry.execute(
+          [:electric, :postgres, :replication, :transaction_received],
+          %{
+            monotonic_time: System.monotonic_time(),
+            bytes: byte_size(data),
+            count: 1,
+            operations: txn.num_changes
+          },
+          %{stack_id: state.stack_id}
+        )
 
         # this will block until all the consumers have processed the transaction because
         # the log collector uses manual demand, and only replies to the `call` once it
@@ -260,7 +278,7 @@ defmodule Electric.Postgres.ReplicationClient do
         # individual storage write can timeout the entire batch.
         OpenTelemetry.with_span(
           "pg_txn.replication_client.transaction_received",
-          [num_changes: length(txn.changes), num_relations: MapSet.size(txn.affected_relations)],
+          [num_changes: txn.num_changes, num_relations: MapSet.size(txn.affected_relations)],
           fn -> apply(m, f, [txn | args]) end
         )
         |> case do
@@ -284,11 +302,7 @@ defmodule Electric.Postgres.ReplicationClient do
   end
 
   defp decode_message(data) do
-    OpenTelemetry.with_span(
-      "pg_txn.replication_client.decode_message",
-      [msg_size: byte_size(data)],
-      fn -> Decoder.decode(data) end
-    )
+    Decoder.decode(data)
   end
 
   defp encode_standby_status_update(state) do

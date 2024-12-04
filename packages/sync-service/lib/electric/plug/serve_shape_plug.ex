@@ -4,6 +4,7 @@ defmodule Electric.Plug.ServeShapePlug do
 
   # The halt/1 function is redefined further down below
   import Plug.Conn, except: [halt: 1]
+  import Electric.Replication.LogOffset, only: [is_log_offset_lt: 2]
 
   alias Electric.Plug.Utils
   import Electric.Plug.Utils, only: [hold_conn_until_stack_ready: 2]
@@ -26,6 +27,9 @@ defmodule Electric.Plug.ServeShapePlug do
                                  "The specified shape definition and handle do not match. " <>
                                    "Please ensure the shape definition is correct or omit the shape handle from the request to obtain a new one."
                              })
+  @offset_out_of_bounds Jason.encode!(%{
+                          offset: ["out of bounds for this shape"]
+                        })
 
   defmodule Params do
     use Ecto.Schema
@@ -232,6 +236,20 @@ defmodule Electric.Plug.ServeShapePlug do
       shape_info = Shapes.get_or_create_shape_handle(config, shape)
       handle_shape_info(conn, shape_info)
     end
+  end
+
+  defp handle_shape_info(
+         %Conn{assigns: %{handle: shape_handle, offset: offset}} = conn,
+         {active_shape_handle, last_offset}
+       )
+       when (is_nil(shape_handle) or shape_handle == active_shape_handle) and
+              is_log_offset_lt(last_offset, offset) do
+    # We found a shape that matches the shape definition
+    # and the shape has the same ID as the shape handle provided by the user
+    # but the provided offset is wrong as it is greater than the last offset for this shape
+    conn
+    |> send_resp(400, @offset_out_of_bounds)
+    |> halt()
   end
 
   defp handle_shape_info(
@@ -577,11 +595,7 @@ defmodule Electric.Plug.ServeShapePlug do
 
   defp open_telemetry_attrs(%Conn{assigns: assigns} = conn) do
     shape_handle =
-      if is_struct(conn.query_params, Plug.Conn.Unfetched) do
-        assigns[:active_shape_handle] || assigns[:shape_handle]
-      else
-        conn.query_params["handle"] || assigns[:active_shape_handle] || assigns[:shape_handle]
-      end
+      conn.query_params["handle"] || assigns[:active_shape_handle] || assigns[:handle]
 
     maybe_up_to_date = if up_to_date = assigns[:up_to_date], do: up_to_date != []
 
@@ -626,7 +640,24 @@ defmodule Electric.Plug.ServeShapePlug do
   # We want to have all the relevant HTTP and shape request attributes on the root span. This
   # is the place to assign them because we keep this plug last in the "plug pipeline" defined
   # in this module.
-  defp end_telemetry_span(conn, _ \\ nil) do
+  defp end_telemetry_span(%Conn{assigns: assigns} = conn, _ \\ nil) do
+    :telemetry.execute(
+      [:electric, :plug, :serve_shape],
+      %{
+        count: 1,
+        bytes: assigns[:streaming_bytes_sent] || 0,
+        monotonic_time: System.monotonic_time()
+      },
+      %{
+        live: assigns[:live],
+        shape_handle:
+          conn.query_params["handle"] || assigns[:active_shape_handle] || assigns[:handle],
+        client_ip: conn.remote_ip,
+        status: conn.status,
+        stack_id: assigns.config[:stack_id]
+      }
+    )
+
     add_span_attrs_from_conn(conn)
     OpentelemetryTelemetry.end_telemetry_span(OpenTelemetry, %{})
     conn

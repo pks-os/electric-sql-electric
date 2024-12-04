@@ -23,8 +23,27 @@ export async function preloadShape<T extends Row<unknown> = Row>(
   return shape
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function sortObjectKeys(obj: any): any {
+  if (typeof obj !== `object` || obj === null) return obj
+
+  if (Array.isArray(obj)) {
+    return obj.map(sortObjectKeys)
+  }
+
+  return (
+    Object.keys(obj)
+      .sort()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .reduce<Record<string, any>>((sorted, key) => {
+        sorted[key] = sortObjectKeys(obj[key])
+        return sorted
+      }, {})
+  )
+}
+
 export function sortedOptionsHash<T>(options: ShapeStreamOptions<T>): string {
-  return JSON.stringify(options, Object.keys(options).sort())
+  return JSON.stringify(sortObjectKeys(options))
 }
 
 export function getShapeStream<T extends Row<unknown>>(
@@ -35,17 +54,16 @@ export function getShapeStream<T extends Row<unknown>>(
   // If the stream is already cached, return it if valid
   if (streamCache.has(shapeHash)) {
     const stream = streamCache.get(shapeHash)! as ShapeStream<T>
-    if (!stream.error && !stream.options.signal?.aborted) {
+    if (!stream.options.signal?.aborted) {
       return stream
     }
 
-    // if stream is cached but errored/aborted, remove it and related shapes
+    // if stream is aborted, remove it and related shapes
     streamCache.delete(shapeHash)
     shapeCache.delete(stream)
   }
 
   const newShapeStream = new ShapeStream<T>(options)
-
   streamCache.set(shapeHash, newShapeStream)
 
   // Return the created shape
@@ -57,17 +75,16 @@ export function getShape<T extends Row<unknown>>(
 ): Shape<T> {
   // If the stream is already cached, return it if valid
   if (shapeCache.has(shapeStream)) {
-    if (!shapeStream.error && !shapeStream.options.signal?.aborted) {
+    if (!shapeStream.options.signal?.aborted) {
       return shapeCache.get(shapeStream)! as Shape<T>
     }
 
-    // if stream is cached but errored/aborted, remove it and related shapes
+    // if stream is aborted, remove it and related shapes
     streamCache.delete(sortedOptionsHash(shapeStream.options))
     shapeCache.delete(shapeStream)
   }
 
   const newShape = new Shape<T>(shapeStream)
-
   shapeCache.set(shapeStream, newShape)
 
   // Return the created shape
