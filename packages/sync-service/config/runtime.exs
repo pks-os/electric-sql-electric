@@ -7,21 +7,14 @@ if config_env() in [:dev, :test] do
   source!([".env.#{config_env()}", ".env.#{config_env()}.local", System.get_env()])
 end
 
-log_level_config =
-  env!("ELECTRIC_LOGGING_LEVEL", :string, "info")
-  |> Electric.ConfigParser.parse_log_level()
+config :logger,
+  level: env!("ELECTRIC_LOG_LEVEL", &Electric.ConfigParser.parse_log_level!/1, :info)
 
-case log_level_config do
-  {:ok, log_level} ->
-    config :logger, level: log_level
-
-  {:error, message} ->
-    raise message
-end
-
-if !env!("ELECTRIC_LOG_COLORS", :boolean, true) do
-  config :logger, :default_formatter, colors: [enabled: false]
-end
+config :logger, :default_formatter,
+  # Doubled line breaks serve as long message boundaries
+  format: "\n$time $metadata[$level] $message\n",
+  metadata: [:pid, :shape_handle, :request_id],
+  colors: [enabled: env!("ELECTRIC_LOG_COLORS", :boolean!, true)]
 
 # Enable this to get **very noisy** but useful messages from BEAM about
 # processes being started, stopped and crashes.
@@ -36,6 +29,17 @@ if config_env() == :test do
   config :electric, pg_version_for_tests: env!("POSTGRES_VERSION", :integer, 150_001)
   config :logger, backends: [:console]
   config :logger, :default_handler, level: :error
+end
+
+config :sentry,
+  environment_name: config_env(),
+  client: Electric.Telemetry.SentryReqHTTPClient
+
+sentry_dsn = env!("SENTRY_DSN", :string, nil)
+
+if !is_nil(sentry_dsn) do
+  config :sentry,
+    dsn: sentry_dsn
 end
 
 service_name = env!("ELECTRIC_SERVICE_NAME", :string, "electric")

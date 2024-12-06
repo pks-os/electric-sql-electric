@@ -1,11 +1,13 @@
 defmodule Electric.Plug.Router do
   use Plug.Router, copy_opts_to_assign: :config
+  use Sentry.PlugCapture
 
   alias Electric.Plug.Utils.CORSHeaderPlug
   alias Electric.Plug.Utils.PassAssignToOptsPlug
 
   plug Plug.RequestId, assign_as: :plug_request_id
   plug :server_header, Electric.version()
+  plug :add_stack_id_to_metadata
   # converts HEAD requests to GET requests
   plug Plug.Head
   plug RemoteIp
@@ -14,6 +16,7 @@ defmodule Electric.Plug.Router do
   plug Electric.Plug.TraceContextPlug
   plug Plug.Telemetry, event_prefix: [:electric, :routing]
   plug Plug.Logger
+  plug Sentry.PlugContext
   plug :put_cors_headers
   plug :dispatch
 
@@ -41,4 +44,9 @@ defmodule Electric.Plug.Router do
 
   def put_cors_headers(conn, _opts),
     do: CORSHeaderPlug.call(conn, %{methods: ["GET", "HEAD"]})
+
+  def add_stack_id_to_metadata(conn, _) do
+    Logger.metadata(stack_id: conn.assigns.config[:stack_id])
+    conn
+  end
 end
