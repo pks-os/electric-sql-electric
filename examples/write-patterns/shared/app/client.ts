@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.API_URL || 'http://localhost:3001'
+const API_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001'
 
 type RequestOptions = {
   method: string
@@ -40,7 +40,7 @@ async function resilientFetch(
     // Could also check the status and retry before returning if you want to be
     // resilient to 4xx and 5xx responses as well as network errors
     return await fetch(url, options)
-  } catch (err) {
+  } catch (_err) {
     return await retryFetch(url, options, retryCount + 1)
   }
 }
