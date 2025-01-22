@@ -1,5 +1,11 @@
 # @core/sync-service
 
+## 1.0.0-beta.5
+
+### Patch Changes
+
+- 4d7b8ba: Add support for shapes on partitioned tables
+
 ## 1.0.0-beta.4
 
 ### Patch Changes
